@@ -17,6 +17,8 @@ const SEUM_ZERO_SHEET = "0컨택리스트";
 const SEUM_LOG_SHEET = "수집로그";
 
 const SEUM_RUN_STATUS_KEY = "SEUM_V2_RUN_STATUS";
+const SEUM_QUERY_CURSOR_KEY_PREFIX = "SEUM_V2_QUERY_CURSOR_";
+const SEUM_QUERY_BATCH_SIZE = 20;
 
 const SEUM_TARGET_AREA_WORDS = ["서울", "경기", "인천"];
 
@@ -32,6 +34,26 @@ const SEUM_REGIONS = [
 
 const SEUM_FOOD_WORDS = ["맛집", "술집", "고기집", "카페"];
 
+function buildSeumQueries_(regions, foods, traces) {
+  const queries = [];
+  regions.forEach(region => foods.forEach(food => traces.forEach(trace => queries.push(`${region} ${food} ${trace}`))));
+  return queries;
+}
+
+const SEUM_QUERY_GROUPS = {
+  SEUM_RUN_1_TestSmall: {
+    displayCount: 5,
+    queries: [
+      "신촌 맛집 업체로부터 식사권을 제공받아", "송도 맛집 업체로부터 식사권을 제공받아",
+      "강남 맛집 식사권을 제공받아", "홍대 술집 식사권을 제공받아", "성수 맛집 체험 후 솔직하게 작성"
+    ]
+  },
+  SEUM_RUN_2_SeoulCore: { displayCount: 3, queries: buildSeumQueries_(["강남", "성수", "홍대", "신촌", "마포"], ["맛집", "술집", "고기집"], ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "강남맛집을 통해"]) },
+  SEUM_RUN_3_SeoulMore: { displayCount: 3, queries: buildSeumQueries_(["송파", "잠실", "합정", "건대", "왕십리"], ["맛집", "술집", "고기집"], ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "디너의여왕을 통해"]) },
+  SEUM_RUN_4_GyeonggiCore: { displayCount: 3, queries: buildSeumQueries_(["수원", "분당", "판교", "일산", "부천", "안양", "하남", "남양주"], ["맛집", "술집", "고기집"], ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "체험 후 솔직하게 작성"]) },
+  SEUM_RUN_5_Incheon: { displayCount: 4, queries: buildSeumQueries_(["인천", "송도"], ["맛집", "술집", "고기집", "카페"], ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "체험 후 솔직하게 작성", "디너의여왕을 통해"]) }
+};
+
 /***********************
  * V2. 실행 파이프라인
  *
@@ -44,31 +66,36 @@ function SEUM_RUN_0_Install() {
 }
 
 function SEUM_RUN_1_TestSmall() {
-  return runSeumV2_("SEUM_RUN_1_TestSmall", SEUM_V1_collect_TestSmall);
+  return runSeumV2QueryBatch_("SEUM_RUN_1_TestSmall");
 }
 
 function SEUM_RUN_2_SeoulCore() {
-  return runSeumV2_("SEUM_RUN_2_SeoulCore", SEUM_V1_collect_1_SeoulCore);
+  return runSeumV2QueryBatch_("SEUM_RUN_2_SeoulCore");
 }
 
 function SEUM_RUN_3_SeoulMore() {
-  return runSeumV2_("SEUM_RUN_3_SeoulMore", SEUM_V1_collect_2_SeoulMore);
+  return runSeumV2QueryBatch_("SEUM_RUN_3_SeoulMore");
 }
 
 function SEUM_RUN_4_GyeonggiCore() {
-  return runSeumV2_("SEUM_RUN_4_GyeonggiCore", SEUM_V1_collect_3_GyeonggiCore);
+  return runSeumV2QueryBatch_("SEUM_RUN_4_GyeonggiCore");
 }
 
 function SEUM_RUN_5_Incheon() {
-  return runSeumV2_("SEUM_RUN_5_Incheon", SEUM_V1_collect_4_Incheon);
+  return runSeumV2QueryBatch_("SEUM_RUN_5_Incheon");
 }
 
 function SEUM_RUN_6_Clean() {
-  return runSeumV2_("SEUM_RUN_6_Clean", SEUM_V1_3_cleanAll);
+  return runSeumV2_("SEUM_RUN_6_Clean", runSeumSafeCleanAndDiagnose_);
 }
 
 function SEUM_RUN_CheckStatus() {
   const status = getSeumV2RunStatus_();
+  const cursorSummary = Object.keys(SEUM_QUERY_GROUPS).map(runName => {
+    const group = SEUM_QUERY_GROUPS[runName];
+    const cursor = getSeumQueryCursor_(runName, group.queries.length);
+    return runName + " 다음 시작 위치 " + cursor.nextIndex + " / 전체 " + cursor.total;
+  }).join("\n");
   const summary = status
     ? [
       "최근 V2 실행: " + status.runName,
@@ -79,8 +106,58 @@ function SEUM_RUN_CheckStatus() {
     ].filter(Boolean).join("\n")
     : "아직 기록된 V2 실행이 없습니다.";
 
-  SpreadsheetApp.getUi().alert("SEUM DB V2 파이프라인 상태\n\n" + summary);
-  return status;
+  SpreadsheetApp.getUi().alert("SEUM DB V2 파이프라인 상태\n\n" + summary + "\n\n[검색 cursor]\n" + cursorSummary);
+  return { status: status, cursors: getAllSeumQueryCursors_() };
+}
+
+function runSeumV2QueryBatch_(runName) {
+  const group = SEUM_QUERY_GROUPS[runName];
+  if (!group) throw new Error("등록되지 않은 SEUM 검색 그룹입니다: " + runName);
+
+  return runSeumV2_(runName, function() {
+    // 매 배치의 근거 범위를 분리한다. 영구 시트(최종DB_창고/0컨택리스트)는 건드리지 않는다.
+    clearSeumWorkingSheets_();
+
+    const cursor = getSeumQueryCursor_(runName, group.queries.length);
+    const start = cursor.nextIndex >= group.queries.length ? 0 : cursor.nextIndex;
+    const end = Math.min(start + SEUM_QUERY_BATCH_SIZE, group.queries.length);
+    const batch = group.queries.slice(start, end);
+    const result = collectSeumWarehouseByQueries_(runName, batch, group.displayCount);
+
+    setSeumQueryCursor_(runName, {
+      nextIndex: end,
+      total: group.queries.length,
+      completed: end >= group.queries.length,
+      updatedAt: formatSeumRunTime_(new Date())
+    });
+    return result;
+  });
+}
+
+function getSeumQueryCursor_(runName, total) {
+  const value = PropertiesService.getScriptProperties().getProperty(SEUM_QUERY_CURSOR_KEY_PREFIX + runName);
+  if (value) {
+    try {
+      const parsed = JSON.parse(value);
+      const nextIndex = Math.max(0, Math.min(Number(parsed.nextIndex) || 0, total));
+      return { nextIndex: nextIndex, total: total, completed: nextIndex >= total, updatedAt: parsed.updatedAt || "" };
+    } catch (error) {
+      // 손상된 cursor는 안전하게 처음부터 다시 시작한다.
+    }
+  }
+  return { nextIndex: 0, total: total, completed: false, updatedAt: "" };
+}
+
+function setSeumQueryCursor_(runName, cursor) {
+  PropertiesService.getScriptProperties().setProperty(SEUM_QUERY_CURSOR_KEY_PREFIX + runName, JSON.stringify(cursor));
+}
+
+function getAllSeumQueryCursors_() {
+  const cursors = {};
+  Object.keys(SEUM_QUERY_GROUPS).forEach(runName => {
+    cursors[runName] = getSeumQueryCursor_(runName, SEUM_QUERY_GROUPS[runName].queries.length);
+  });
+  return cursors;
 }
 
 function runSeumV2_(runName, runner) {
@@ -101,14 +178,16 @@ function runSeumV2_(runName, runner) {
 
   try {
     const result = runner();
-    setSeumV2RunStatus_({
+    const completedStatus = {
       version: 2,
       runName: runName,
       state: "COMPLETED",
       startedAt: startedAt,
       finishedAt: formatSeumRunTime_(new Date()),
       error: ""
-    });
+    };
+    if (result && result.cleaned) completedStatus.cleaned = result.cleaned;
+    setSeumV2RunStatus_(completedStatus);
     return result;
   } catch (error) {
     setSeumV2RunStatus_({
@@ -228,11 +307,13 @@ function SEUM_V1_1_testNaverApi() {
 }
 
 function SEUM_V1_2_clearWorkingOnly() {
-  clearRowsExceptHeader_(SEUM_RAW_SHEET);
-  clearRowsExceptHeader_(SEUM_MATCH_SHEET);
-  clearRowsExceptHeader_(SEUM_HOLD_SHEET);
+  clearSeumWorkingSheets_();
 
   SpreadsheetApp.getUi().alert("작업시트 초기화 완료\n\n원본수집 / 네이버매칭 / 보류DB만 비웠습니다.\n최종DB_창고와 0컨택리스트는 유지됩니다.");
+}
+
+function clearSeumWorkingSheets_() {
+  [SEUM_RAW_SHEET, SEUM_MATCH_SHEET, SEUM_HOLD_SHEET].forEach(clearRowsExceptHeader_);
 }
 
 function clearRowsExceptHeader_(sheetName) {
@@ -497,7 +578,14 @@ function collectSeumWarehouseByQueries_(runName, queries, displayCount) {
   if (holdRows.length > 0) holdSheet.getRange(holdSheet.getLastRow() + 1, 1, holdRows.length, holdRows[0].length).setValues(holdRows);
   if (finalRows.length > 0) finalSheet.getRange(finalSheet.getLastRow() + 1, 1, finalRows.length, finalRows[0].length).setValues(finalRows);
 
-  logSheet.appendRow([now, runName, queries.length, blogCount, matchedCount, savedCount, holdCount, "SEUM DB V1 실행 / 저장대상: 최종DB_창고"]);
+  // 원본수집에 남아 있는 이번 배치의 근거링크와 연결된 행만 안전 정리한다.
+  const cleanResult = cleanSeumCurrentEvidence_();
+
+  const cleanMemo = "오매칭정리 " + cleanResult.mismatch + "건 / " +
+    "근거링크중복정리 " + cleanResult.duplicates + "건 / " +
+    "품질정리 " + cleanResult.quality + "건";
+  logSheet.appendRow([now, runName, queries.length, blogCount, matchedCount, savedCount, holdCount,
+    "SEUM DB V1 실행 / 저장대상: 최종DB_창고 / " + cleanMemo]);
 
   SpreadsheetApp.getUi().alert(
     "수집 완료!\n\n" +
@@ -506,8 +594,19 @@ function collectSeumWarehouseByQueries_(runName, queries, displayCount) {
     "블로그 후보: " + blogCount + "개\n" +
     "매칭 성공: " + matchedCount + "개\n" +
     "최종DB_창고 신규 저장: " + savedCount + "개\n" +
-    "보류DB: " + holdCount + "개"
+    "보류DB: " + holdCount + "개\n" +
+    "이번 실행 안전 정리: " + cleanResult.total + "건\n" +
+    cleanMemo
   );
+
+  return {
+    queryCount: queries.length,
+    blogCount: blogCount,
+    matchedCount: matchedCount,
+    savedCount: savedCount,
+    holdCount: holdCount,
+    cleaned: cleanResult
+  };
 }
 
 /***********************
@@ -515,17 +614,37 @@ function collectSeumWarehouseByQueries_(runName, queries, displayCount) {
  ***********************/
 
 function SEUM_V1_3_cleanAll() {
-  const a = cleanMismatchRowsByRawStrict_();
-  const b = cleanDuplicateEvidenceLinks_();
-  const c = cleanCurrentBatchQualityIssues_();
+  const result = cleanSeumCurrentEvidence_();
 
   SpreadsheetApp.getUi().alert(
     "SEUM V1 정리 완료\n\n" +
-    "오매칭 정리: " + a + "건\n" +
-    "근거링크 중복 정리: " + b + "건\n" +
-    "품질 정리: " + c + "건\n\n" +
+    "오매칭 정리: " + result.mismatch + "건\n" +
+    "근거링크 중복 정리: " + result.duplicates + "건\n" +
+    "품질 정리: " + result.quality + "건\n\n" +
     "다음: SEUM_V1_4_checkStatus 실행"
   );
+  return result;
+}
+
+function cleanSeumCurrentEvidence_() {
+  const mismatch = cleanMismatchRowsByRawStrict_();
+  const duplicates = cleanDuplicateEvidenceLinks_();
+  const quality = cleanCurrentBatchQualityIssues_();
+  return { mismatch: mismatch, duplicates: duplicates, quality: quality, total: mismatch + duplicates + quality };
+}
+
+function runSeumSafeCleanAndDiagnose_() {
+  const result = cleanSeumCurrentEvidence_();
+  SpreadsheetApp.getUi().alert(
+    "SEUM 안전 정리/진단 완료\n\n" +
+    "현재 원본수집 근거가 있는 행만 검사했습니다.\n" +
+    "오매칭: " + result.mismatch + "건\n" +
+    "근거링크 중복: " + result.duplicates + "건\n" +
+    "품질 문제: " + result.quality + "건\n" +
+    "총 정리: " + result.total + "건\n\n" +
+    "작업시트는 초기화하지 않았습니다."
+  );
+  return result;
 }
 
 function cleanMismatchRowsByRawStrict_() {
@@ -705,13 +824,14 @@ function cleanCurrentBatchQualityIssues_() {
     const category = String(row[categoryCol] || "").trim();
     const link = String(row[linkCol] || "").trim();
     const rawText = rawMap[link] || "";
+    if (!rawText) return; // 현재 배치의 원본 근거가 없는 과거 최종DB 행은 보존
 
     if (isBadBusinessNameOrCategory_(name, category)) {
       deleteRows.push(index + 2);
       return;
     }
 
-    if (rawText && !hasStrongStoreNameMatch_(name, rawText)) {
+    if (!hasStrongStoreNameMatch_(name, rawText)) {
       deleteRows.push(index + 2);
     }
   });
