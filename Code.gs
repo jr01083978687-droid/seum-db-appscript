@@ -17,6 +17,8 @@ const SEUM_ZERO_SHEET = "0컨택리스트";
 const SEUM_LOG_SHEET = "수집로그";
 
 const SEUM_RUN_STATUS_KEY = "SEUM_V2_RUN_STATUS";
+const SEUM_QUERY_CURSOR_PREFIX = "SEUM_V2_QUERY_CURSOR_";
+const SEUM_QUERY_BATCH_SIZE = 20;
 
 const SEUM_TARGET_AREA_WORDS = ["서울", "경기", "인천"];
 
@@ -32,6 +34,36 @@ const SEUM_REGIONS = [
 
 const SEUM_FOOD_WORDS = ["맛집", "술집", "고기집", "카페"];
 
+const SEUM_QUERY_GROUPS = {
+  SEUM_RUN_1_TestSmall: [
+    "신촌 맛집 업체로부터 식사권을 제공받아",
+    "송도 맛집 업체로부터 식사권을 제공받아",
+    "강남 맛집 식사권을 제공받아",
+    "홍대 술집 식사권을 제공받아",
+    "성수 맛집 체험 후 솔직하게 작성"
+  ],
+  SEUM_RUN_2_SeoulCore: makeSeumQueryGroup_(
+    ["강남", "성수", "홍대", "신촌", "마포"],
+    ["맛집", "술집", "고기집"],
+    ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "강남맛집을 통해"]
+  ),
+  SEUM_RUN_3_SeoulMore: makeSeumQueryGroup_(
+    ["송파", "잠실", "합정", "건대", "왕십리"],
+    ["맛집", "술집", "고기집"],
+    ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "디너의여왕을 통해"]
+  ),
+  SEUM_RUN_4_GyeonggiCore: makeSeumQueryGroup_(
+    ["수원", "분당", "판교", "일산", "부천", "안양", "하남", "남양주"],
+    ["맛집", "술집", "고기집"],
+    ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "체험 후 솔직하게 작성"]
+  ),
+  SEUM_RUN_5_Incheon: makeSeumQueryGroup_(
+    ["인천", "송도"],
+    ["맛집", "술집", "고기집", "카페"],
+    ["업체로부터 식사권을 제공받아", "식사권을 제공받아", "체험 후 솔직하게 작성", "디너의여왕을 통해"]
+  )
+};
+
 /***********************
  * V2. 실행 파이프라인
  *
@@ -44,27 +76,27 @@ function SEUM_RUN_0_Install() {
 }
 
 function SEUM_RUN_1_TestSmall() {
-  return runSeumV2_("SEUM_RUN_1_TestSmall", SEUM_V1_collect_TestSmall);
+  return runSeumV2QueryBatch_("SEUM_RUN_1_TestSmall", 5, 5);
 }
 
 function SEUM_RUN_2_SeoulCore() {
-  return runSeumV2_("SEUM_RUN_2_SeoulCore", SEUM_V1_collect_1_SeoulCore);
+  return runSeumV2QueryBatch_("SEUM_RUN_2_SeoulCore", SEUM_QUERY_BATCH_SIZE, 3);
 }
 
 function SEUM_RUN_3_SeoulMore() {
-  return runSeumV2_("SEUM_RUN_3_SeoulMore", SEUM_V1_collect_2_SeoulMore);
+  return runSeumV2QueryBatch_("SEUM_RUN_3_SeoulMore", SEUM_QUERY_BATCH_SIZE, 3);
 }
 
 function SEUM_RUN_4_GyeonggiCore() {
-  return runSeumV2_("SEUM_RUN_4_GyeonggiCore", SEUM_V1_collect_3_GyeonggiCore);
+  return runSeumV2QueryBatch_("SEUM_RUN_4_GyeonggiCore", SEUM_QUERY_BATCH_SIZE, 3);
 }
 
 function SEUM_RUN_5_Incheon() {
-  return runSeumV2_("SEUM_RUN_5_Incheon", SEUM_V1_collect_4_Incheon);
+  return runSeumV2QueryBatch_("SEUM_RUN_5_Incheon", SEUM_QUERY_BATCH_SIZE, 4);
 }
 
 function SEUM_RUN_6_Clean() {
-  return runSeumV2_("SEUM_RUN_6_Clean", SEUM_V1_3_cleanAll);
+  return runSeumV2_("SEUM_RUN_6_Clean", SEUM_V1_2_clearWorkingOnly);
 }
 
 function SEUM_RUN_CheckStatus() {
@@ -123,6 +155,44 @@ function runSeumV2_(runName, runner) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function runSeumV2QueryBatch_(runName, batchSize, displayCount) {
+  return runSeumV2_(runName, function() {
+    const queries = SEUM_QUERY_GROUPS[runName];
+    if (!queries || queries.length === 0) {
+      throw new Error(runName + "에 설정된 검색어가 없습니다.");
+    }
+
+    const props = PropertiesService.getScriptProperties();
+    const cursorKey = SEUM_QUERY_CURSOR_PREFIX + runName;
+    const savedCursor = Number(props.getProperty(cursorKey));
+    const cursor = Number.isInteger(savedCursor) && savedCursor >= 0 && savedCursor < queries.length
+      ? savedCursor
+      : 0;
+    const safeBatchSize = Math.min(SEUM_QUERY_BATCH_SIZE, Math.max(1, batchSize));
+    const batch = queries.slice(cursor, cursor + safeBatchSize);
+
+    collectSeumWarehouseByQueries_(runName, batch, displayCount);
+
+    const nextCursor = (cursor + batch.length) % queries.length;
+    props.setProperty(cursorKey, String(nextCursor));
+    return {
+      runName: runName,
+      queryCount: batch.length,
+      startCursor: cursor,
+      nextCursor: nextCursor,
+      totalQueries: queries.length
+    };
+  });
+}
+
+function makeSeumQueryGroup_(regions, foods, traces) {
+  const queries = [];
+  regions.forEach(region => foods.forEach(food => traces.forEach(trace => {
+    queries.push(`${region} ${food} ${trace}`);
+  })));
+  return queries;
 }
 
 function getSeumV2RunStatus_() {
