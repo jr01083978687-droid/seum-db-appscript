@@ -1,5 +1,5 @@
 /************************************************************
- * SEUM DB V1 통합코드
+ * SEUM DB V2 실행 파이프라인 (V1 수집기 호환)
  * 목적: 네이버 블로그 체험단 흔적 → 네이버 지역검색 매칭 → 최종DB_창고 저장
  * 주의: NAVER_CLIENT_ID / NAVER_CLIENT_SECRET은 Apps Script [프로젝트 설정] > [스크립트 속성]에 저장
  ************************************************************/
@@ -16,6 +16,8 @@ const SEUM_HOLD_SHEET = "보류DB";
 const SEUM_ZERO_SHEET = "0컨택리스트";
 const SEUM_LOG_SHEET = "수집로그";
 
+const SEUM_RUN_STATUS_KEY = "SEUM_V2_RUN_STATUS";
+
 const SEUM_TARGET_AREA_WORDS = ["서울", "경기", "인천"];
 
 const SEUM_REGIONS = [
@@ -29,6 +31,125 @@ const SEUM_REGIONS = [
 ];
 
 const SEUM_FOOD_WORDS = ["맛집", "술집", "고기집", "카페"];
+
+/***********************
+ * V2. 실행 파이프라인
+ *
+ * Apps Script 편집기에서는 아래 SEUM_RUN_* 함수만 실행한다. 기존 V1 함수는
+ * 수집/정리 구현으로 계속 사용하며, 이 진입점이 잠금과 실행 상태 기록을 담당한다.
+ ***********************/
+
+function SEUM_RUN_0_Install() {
+  return runSeumV2_("SEUM_RUN_0_Install", SEUM_V1_0_installSheets);
+}
+
+function SEUM_RUN_1_TestSmall() {
+  return runSeumV2_("SEUM_RUN_1_TestSmall", SEUM_V1_collect_TestSmall);
+}
+
+function SEUM_RUN_2_SeoulCore() {
+  return runSeumV2_("SEUM_RUN_2_SeoulCore", SEUM_V1_collect_1_SeoulCore);
+}
+
+function SEUM_RUN_3_SeoulMore() {
+  return runSeumV2_("SEUM_RUN_3_SeoulMore", SEUM_V1_collect_2_SeoulMore);
+}
+
+function SEUM_RUN_4_GyeonggiCore() {
+  return runSeumV2_("SEUM_RUN_4_GyeonggiCore", SEUM_V1_collect_3_GyeonggiCore);
+}
+
+function SEUM_RUN_5_Incheon() {
+  return runSeumV2_("SEUM_RUN_5_Incheon", SEUM_V1_collect_4_Incheon);
+}
+
+function SEUM_RUN_6_Clean() {
+  return runSeumV2_("SEUM_RUN_6_Clean", SEUM_V1_3_cleanAll);
+}
+
+function SEUM_RUN_CheckStatus() {
+  const status = getSeumV2RunStatus_();
+  const summary = status
+    ? [
+      "최근 V2 실행: " + status.runName,
+      "상태: " + status.state,
+      "시작: " + status.startedAt,
+      "종료: " + (status.finishedAt || "-"),
+      status.error ? "오류: " + status.error : ""
+    ].filter(Boolean).join("\n")
+    : "아직 기록된 V2 실행이 없습니다.";
+
+  SpreadsheetApp.getUi().alert("SEUM DB V2 파이프라인 상태\n\n" + summary);
+  return status;
+}
+
+function runSeumV2_(runName, runner) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) {
+    throw new Error("다른 SEUM V2 실행이 진행 중입니다. 잠시 후 상태를 확인해 주세요.");
+  }
+
+  const startedAt = formatSeumRunTime_(new Date());
+  setSeumV2RunStatus_({
+    version: 2,
+    runName: runName,
+    state: "RUNNING",
+    startedAt: startedAt,
+    finishedAt: "",
+    error: ""
+  });
+
+  try {
+    const result = runner();
+    setSeumV2RunStatus_({
+      version: 2,
+      runName: runName,
+      state: "COMPLETED",
+      startedAt: startedAt,
+      finishedAt: formatSeumRunTime_(new Date()),
+      error: ""
+    });
+    return result;
+  } catch (error) {
+    setSeumV2RunStatus_({
+      version: 2,
+      runName: runName,
+      state: "FAILED",
+      startedAt: startedAt,
+      finishedAt: formatSeumRunTime_(new Date()),
+      error: error && error.message ? error.message : String(error)
+    });
+    throw error;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getSeumV2RunStatus_() {
+  const value = PropertiesService.getScriptProperties().getProperty(SEUM_RUN_STATUS_KEY);
+  if (!value) return null;
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return {
+      version: 2,
+      runName: "알 수 없음",
+      state: "INVALID_STATUS",
+      startedAt: "-",
+      finishedAt: "-",
+      error: "저장된 실행 상태를 읽을 수 없습니다."
+    };
+  }
+}
+
+function setSeumV2RunStatus_(status) {
+  PropertiesService.getScriptProperties().setProperty(SEUM_RUN_STATUS_KEY, JSON.stringify(status));
+}
+
+function formatSeumRunTime_(date) {
+  return Utilities.formatDate(date, "Asia/Seoul", "yyyy-MM-dd HH:mm:ss");
+}
 
 /***********************
  * 0. 최초 설치 / 점검
