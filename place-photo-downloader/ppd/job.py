@@ -204,6 +204,8 @@ class Job:
                 break
             url = requests.compat.urljoin(url, loc)
             chain.append(url)
+            if parse_place_url(url)[1]:
+                break
         return chain
 
     # ---------- 목록 수집 ----------
@@ -282,6 +284,15 @@ class Job:
                 page.wait_for_timeout(1500)
                 self._wait_captcha(page)
             self._drain(pending, items, extractor, raw_dumps)
+        except Exception:
+            kind = "blog" if dom_blog_links else "visitor"
+            try:
+                self._drain(pending, items, extractor, raw_dumps)
+                self.dump_debug(f"{kind}_응답.json", raw_dumps[:20])
+                self.dump_debug(f"{kind}_페이지.html", page.content())
+            except Exception:  # noqa: BLE001 - 진단 저장 실패는 원래 오류를 가리지 않는다
+                pass
+            raise
         finally:
             page.remove_listener("response", on_response)
         if not items:
