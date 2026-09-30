@@ -89,7 +89,8 @@ def extract_visitor_reviews(obj, refs=None):
         rid = str(d.get("id") or d.get("reviewId") or "")
         key = rid or photos[0]["url"]
         out[key] = {"key": key, "id": rid, "author": nickname,
-                    "date_text": str(d.get("created") or d.get("visited") or ""),
+                    # 방문자리뷰는 방문일 기준 (없으면 작성일)
+                    "date_text": str(d.get("visited") or d.get("created") or ""),
                     "photos": photos}
     return list(out.values())
 

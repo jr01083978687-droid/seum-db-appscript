@@ -103,6 +103,7 @@ def test_extract_reviews_schema_agnostic():
     refs = {"A:1": {"nickname": "리뷰왕"}}
     vis = extract_visitor_reviews(gql, refs)
     assert len(vis) == 1 and vis[0]["author"] == "리뷰왕" and vis[0]["photos"][1]["is_video"]
+    assert vis[0]["date_text"] == "9.19.금"  # 방문일 기준
 
 
 class FakeResp:
