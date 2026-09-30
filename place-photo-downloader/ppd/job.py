@@ -191,6 +191,10 @@ class Job:
             return None
         if n in norm(post.title) or n in norm(it.get("title")):
             return "제목"
+        # 본문에 다른 가게 지도만 첨부돼 있으면 그 가게 글이다 (상호명이 언급만 된 경우)
+        maps = set(re.findall(r'placeId(?:&quot;|["\'])?\s*:\s*(?:&quot;|["\'])?(\d{5,})', post.html or ""))
+        if maps and pid and pid not in maps:
+            return None
         body = norm(post.text)
         count = body.count(n)
         areas = [norm(t) for t in area_tokens(address) if not t.endswith(("구", "시", "군"))]

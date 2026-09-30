@@ -151,3 +151,13 @@ def test_nearby_other_shop_rejected():
     assert m({}, other, "아우성황소곱창", PID, addr) is None
     assert m({}, listicle, "아우성황소곱창", PID, addr) is None
     assert m({}, same, "아우성황소곱창", PID, addr) == "본문+주소"
+
+
+def test_post_with_other_place_map_rejected():
+    """실제 사례: 육회집 후기(다른 가게 지도 첨부)에 상호명이 여러 번 언급돼 통과하던 문제."""
+    from ppd.blog_parser import BlogPost
+
+    html = '<div class="se-placesMap" data-linkdata=\'{&quot;placeId&quot;:&quot;1111111&quot;}\'></div>'
+    post = BlogPost("육회어때 응암점", None, [], html=html,
+                    text="아우성황소곱창 옆 연서로29길 육회집. 아우성황소곱창 가기 전에 들름")
+    assert Job._matches_place({}, post, "아우성황소곱창", PID, "서울 은평구 연서로29길 14-12") is None
