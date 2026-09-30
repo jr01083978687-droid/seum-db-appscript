@@ -1,6 +1,7 @@
 """창 없이 실행 (점검/테스트용).
 
-python cli.py <링크> --start 2026-07-01 --end 2026-09-30 [--visitor] [--out 폴더] [--show]
+python cli.py <링크> --start 2026-07-01 --end 2026-09-30 [--mode api|browser] [--visitor] [--out 폴더] [--show]
+API 키는 환경변수 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET
 """
 import argparse
 import os
@@ -13,18 +14,22 @@ from ppd.job import Job, JobOptions
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("link")
+    ap.add_argument("link", nargs="?", default="")
     ap.add_argument("--start", default=(date.today() - timedelta(days=90)).isoformat())
     ap.add_argument("--end", default=date.today().isoformat())
     ap.add_argument("--out", default="output")
     ap.add_argument("--visitor", action="store_true")
     ap.add_argument("--show", action="store_true", help="브라우저 창 보이기")
     ap.add_argument("--max-reviews", type=int, default=300)
+    ap.add_argument("--mode", choices=["api", "browser"], default="api")
+    ap.add_argument("--name", default="", help="상호명 직접 지정")
     a = ap.parse_args()
 
     opts = JobOptions(link=a.link, start=parse_input_date(a.start), end=parse_input_date(a.end),
                       out_dir=os.path.abspath(a.out), include_visitor=a.visitor, headless=not a.show,
-                      max_reviews=a.max_reviews)
+                      max_reviews=a.max_reviews, mode=a.mode, place_name=a.name,
+                      client_id=os.environ.get("NAVER_CLIENT_ID", ""),
+                      client_secret=os.environ.get("NAVER_CLIENT_SECRET", ""))
     job = Job(opts, log=lambda m: print(m, flush=True))
     try:
         job.run()

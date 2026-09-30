@@ -2,7 +2,8 @@
   "link": "https://naver.me/xa5WfSO3",
   "start": "2026-06-01",
   "end": "2026-09-30",
-  "visitor": true,
+  "mode": "api",
+  "visitor": false,
   "max_reviews": 60,
-  "run": 5
+  "run": 7
 }

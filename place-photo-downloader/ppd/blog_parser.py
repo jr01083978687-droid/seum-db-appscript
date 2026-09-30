@@ -53,6 +53,8 @@ class BlogPost:
     title: str
     date: object      # datetime.date | None
     photos: list
+    text: str = ""    # 본문 텍스트 (플레이스 일치 확인용)
+    html: str = ""
 
 
 def parse_blog_html(html):
@@ -105,7 +107,8 @@ def parse_blog_html(html):
         elif _inside_video(img) and _is_video_thumb_host(src):
             add(src, True)
 
-    return BlogPost(title=_title(soup), date=_post_date(soup), photos=photos)
+    return BlogPost(title=_title(soup), date=_post_date(soup), photos=photos,
+                    text=body.get_text(" ", strip=True), html=html)
 
 
 def normalize_image_url(url):

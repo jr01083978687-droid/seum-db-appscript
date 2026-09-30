@@ -23,10 +23,13 @@ jobs:
         shell: pwsh
         env:
           PYTHONIOENCODING: utf-8
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
         run: |
           $cfg = Get-Content live-test.json -Raw -Encoding utf8 | ConvertFrom-Json
           $a = @($cfg.link, "--out", "output", "--max-reviews", "$($cfg.max_reviews)", "--start", $cfg.start, "--end", $cfg.end)
           if ($cfg.visitor) { $a += "--visitor" }
+          if ($cfg.mode) { $a += @("--mode", $cfg.mode) }
           python cli.py @a
           "exit=$LASTEXITCODE"
       - name: Report

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from ppd import config
 from ppd.dates import parse_input_date
 from ppd.job import Job, JobOptions, StopRequested
 
@@ -19,7 +20,7 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(APP_TITLE)
-        root.geometry("720x560")
+        root.geometry("780x640")
         root.minsize(600, 460)
         self.msgs = queue.Queue()
         self.stop_event = threading.Event()
@@ -31,14 +32,48 @@ class App:
         frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
 
-        ttk.Label(frm, text="플레이스 링크").grid(row=0, column=0, sticky="w", **pad)
+        cfg = config.load()
+        r = 0
+        ttk.Label(frm, text="방식").grid(row=r, column=0, sticky="w", **pad)
+        modes = ttk.Frame(frm)
+        modes.grid(row=r, column=1, columnspan=3, sticky="w", **pad)
+        self.mode = tk.StringVar(value=cfg.get("mode", "api"))
+        ttk.Radiobutton(modes, text="공식 검색 API (추천, 보안확인 없음)", value="api", variable=self.mode,
+                        command=self._sync_mode).pack(side="left")
+        ttk.Radiobutton(modes, text="플레이스 화면 (방문자리뷰 가능, 보안확인 뜰 수 있음)", value="browser",
+                        variable=self.mode, command=self._sync_mode).pack(side="left", padx=12)
+
+        r += 1
+        ttk.Label(frm, text="플레이스 링크").grid(row=r, column=0, sticky="w", **pad)
         self.link = tk.StringVar()
-        ttk.Entry(frm, textvariable=self.link).grid(row=0, column=1, columnspan=3, sticky="ew", **pad)
+        ttk.Entry(frm, textvariable=self.link).grid(row=r, column=1, columnspan=3, sticky="ew", **pad)
+
+        r += 1
+        ttk.Label(frm, text="상호명(선택)").grid(row=r, column=0, sticky="w", **pad)
+        self.place_name = tk.StringVar()
+        self.name_entry = ttk.Entry(frm, textvariable=self.place_name)
+        self.name_entry.grid(row=r, column=1, sticky="ew", **pad)
+        self.name_hint = ttk.Label(frm, text="비우면 링크에서 자동으로 찾음", foreground="gray")
+        self.name_hint.grid(row=r, column=2, columnspan=2, sticky="w", **pad)
+
+        r += 1
+        ttk.Label(frm, text="네이버 API 키").grid(row=r, column=0, sticky="w", **pad)
+        keys = ttk.Frame(frm)
+        keys.grid(row=r, column=1, columnspan=3, sticky="ew", **pad)
+        self.client_id = tk.StringVar(value=cfg.get("client_id", ""))
+        self.client_secret = tk.StringVar(value=cfg.get("client_secret", ""))
+        ttk.Label(keys, text="Client ID").pack(side="left")
+        self.id_entry = ttk.Entry(keys, textvariable=self.client_id, width=24)
+        self.id_entry.pack(side="left", padx=(4, 12))
+        ttk.Label(keys, text="Secret").pack(side="left")
+        self.secret_entry = ttk.Entry(keys, textvariable=self.client_secret, width=16, show="●")
+        self.secret_entry.pack(side="left", padx=4)
 
         today = date.today()
-        ttk.Label(frm, text="기간").grid(row=1, column=0, sticky="w", **pad)
+        r += 1
+        ttk.Label(frm, text="기간").grid(row=r, column=0, sticky="w", **pad)
         dates = ttk.Frame(frm)
-        dates.grid(row=1, column=1, columnspan=3, sticky="w", **pad)
+        dates.grid(row=r, column=1, columnspan=3, sticky="w", **pad)
         self.start = tk.StringVar(value=(today - timedelta(days=90)).isoformat())
         self.end = tk.StringVar(value=today.isoformat())
         ttk.Entry(dates, textvariable=self.start, width=12).pack(side="left")
@@ -48,24 +83,29 @@ class App:
             ttk.Button(dates, text=label, width=6,
                        command=lambda d=days: self._set_range(d)).pack(side="left", padx=(6, 0))
 
-        ttk.Label(frm, text="저장 폴더").grid(row=2, column=0, sticky="w", **pad)
-        self.out = tk.StringVar(value=DEFAULT_OUT)
-        ttk.Entry(frm, textvariable=self.out).grid(row=2, column=1, columnspan=2, sticky="ew", **pad)
-        ttk.Button(frm, text="찾아보기", command=self._pick_dir).grid(row=2, column=3, **pad)
+        r += 1
+        ttk.Label(frm, text="저장 폴더").grid(row=r, column=0, sticky="w", **pad)
+        self.out = tk.StringVar(value=cfg.get("out_dir", DEFAULT_OUT))
+        ttk.Entry(frm, textvariable=self.out).grid(row=r, column=1, columnspan=2, sticky="ew", **pad)
+        ttk.Button(frm, text="찾아보기", command=self._pick_dir).grid(row=r, column=3, **pad)
 
+        r += 1
         opts = ttk.Frame(frm)
-        opts.grid(row=3, column=0, columnspan=4, sticky="w", **pad)
+        opts.grid(row=r, column=0, columnspan=4, sticky="w", **pad)
         self.visitor = tk.BooleanVar(value=False)
         self.headless = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opts, text="방문자리뷰 사진도 받기", variable=self.visitor).pack(side="left")
-        ttk.Checkbutton(opts, text="브라우저 창 숨기기", variable=self.headless).pack(side="left", padx=12)
-        ttk.Label(opts, text="최대 확인 리뷰 수").pack(side="left", padx=(12, 4))
-        self.max_reviews = tk.StringVar(value="300")
+        self.visitor_cb = ttk.Checkbutton(opts, text="방문자리뷰 사진도 받기", variable=self.visitor)
+        self.visitor_cb.pack(side="left")
+        self.headless_cb = ttk.Checkbutton(opts, text="브라우저 창 숨기기", variable=self.headless)
+        self.headless_cb.pack(side="left", padx=12)
+        ttk.Label(opts, text="최대 확인 글 수").pack(side="left", padx=(12, 4))
+        self.max_reviews = tk.StringVar(value=str(cfg.get("max_reviews", 300)))
         ttk.Spinbox(opts, from_=10, to=3000, increment=50, width=6,
                     textvariable=self.max_reviews).pack(side="left")
+        self._row_buttons = r + 1
 
         btns = ttk.Frame(frm)
-        btns.grid(row=4, column=0, columnspan=4, sticky="ew", **pad)
+        btns.grid(row=self._row_buttons, column=0, columnspan=4, sticky="ew", **pad)
         self.start_btn = ttk.Button(btns, text="시작", command=self._start)
         self.start_btn.pack(side="left")
         self.stop_btn = ttk.Button(btns, text="중지", command=self._stop, state="disabled")
@@ -76,18 +116,30 @@ class App:
         self.progress.pack(side="left", fill="x", expand=True, padx=(12, 0))
 
         self.logbox = tk.Text(frm, height=18, wrap="word", state="disabled")
-        self.logbox.grid(row=5, column=0, columnspan=4, sticky="nsew", **pad)
-        frm.rowconfigure(5, weight=1)
+        log_row = self._row_buttons + 1
+        self.logbox.grid(row=log_row, column=0, columnspan=4, sticky="nsew", **pad)
+        frm.rowconfigure(log_row, weight=1)
         sb = ttk.Scrollbar(frm, command=self.logbox.yview)
-        sb.grid(row=5, column=4, sticky="ns")
+        sb.grid(row=log_row, column=4, sticky="ns")
         self.logbox["yscrollcommand"] = sb.set
 
         self._append("링크를 붙여넣고 [시작]을 누르세요. (naver.me 공유 링크, 지도/플레이스 주소 모두 가능)\n"
-                     "보안확인 화면이 뜨면 열린 브라우저 창에서 직접 풀어주시면 이어서 진행합니다.")
+                     "공식 API 방식: 네이버 개발자센터의 검색 API 키가 필요합니다 (한 번 입력하면 이 PC에 저장).\n"
+                     "플레이스 화면 방식: 보안확인이 뜨면 브라우저 창에서 직접 풀어주세요.")
+        self._sync_mode()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.after(100, self._pump)
 
     # ---------- UI 동작 ----------
+    def _sync_mode(self):
+        api = self.mode.get() == "api"
+        for w in (self.id_entry, self.secret_entry, self.name_entry):
+            w["state"] = "normal" if api else "disabled"
+        for w in (self.visitor_cb, self.headless_cb):
+            w["state"] = "disabled" if api else "normal"
+        if api:
+            self.visitor.set(False)
+
     def _set_range(self, days):
         today = date.today()
         self.start.set((today - timedelta(days=days)).isoformat())
@@ -109,8 +161,12 @@ class App:
     def _start(self):
         link = self.link.get().strip()
         start, end = parse_input_date(self.start.get()), parse_input_date(self.end.get())
-        if not link:
-            return messagebox.showwarning(APP_TITLE, "플레이스 링크를 입력하세요.")
+        mode = self.mode.get()
+        if not link and not (mode == "api" and self.place_name.get().strip()):
+            return messagebox.showwarning(APP_TITLE, "플레이스 링크를 입력하세요. (공식 API 방식은 상호명만 입력해도 됩니다)")
+        if mode == "api" and not (self.client_id.get().strip() and self.client_secret.get().strip()):
+            return messagebox.showwarning(APP_TITLE, "네이버 API Client ID와 Secret을 입력하세요.\n"
+                                          "(developers.naver.com → 애플리케이션 등록 → 검색 API)")
         if not start or not end:
             return messagebox.showwarning(APP_TITLE, "기간을 2026-01-31 형식으로 입력하세요.")
         if start > end:
@@ -124,9 +180,16 @@ class App:
         os.makedirs(out_dir, exist_ok=True)
         self.log_file = open(os.path.join(out_dir, f"_로그_{datetime.now():%Y%m%d_%H%M%S}.txt"),
                              "w", encoding="utf-8")
+        try:
+            config.save({"mode": mode, "client_id": self.client_id.get().strip(),
+                         "client_secret": self.client_secret.get().strip(),
+                         "out_dir": out_dir, "max_reviews": max_reviews})
+        except OSError:
+            pass  # 설정 저장 실패는 작업을 막지 않는다
         opts = JobOptions(link=link, start=start, end=end, out_dir=out_dir,
                           include_visitor=self.visitor.get(), headless=self.headless.get(),
-                          max_reviews=max_reviews)
+                          max_reviews=max_reviews, mode=mode, client_id=self.client_id.get(),
+                          client_secret=self.client_secret.get(), place_name=self.place_name.get())
         self.stop_event.clear()
         self.start_btn["state"], self.stop_btn["state"] = "disabled", "normal"
         self.progress["value"] = 0
@@ -212,6 +275,15 @@ def selftest():
                 break
             except Exception as e:  # noqa: BLE001
                 lines.append(f"{ch}: FAIL {str(e).splitlines()[0]}")
+    try:  # 창 화면이 오류 없이 만들어지는지도 확인
+        root = tk.Tk()
+        App(root)
+        root.update()
+        root.destroy()
+        lines.append("gui: OK")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"gui: FAIL {e}")
+        ok = False
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     sys.exit(0 if ok else 1)

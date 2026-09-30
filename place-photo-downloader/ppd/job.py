@@ -1,4 +1,8 @@
-"""전체 작업 흐름: 링크 해석 → 리뷰 목록 수집(브라우저) → 블로그 본문 사진 추출 → 다운로드."""
+"""전체 작업 흐름.
+
+- api 방식(기본): 링크 → 상호명/주소 → 네이버 공식 블로그 검색 API → 본문에서 이 가게 글인지 확인 → 사진 저장
+- browser 방식: 플레이스 화면을 브라우저로 넘겨 블로그/방문자리뷰 목록 수집 → 사진 저장
+"""
 import json
 import os
 import re
@@ -11,7 +15,9 @@ import requests
 from . import blog_parser
 from .dates import parse_kr_date
 from .downloader import UA_MOBILE, PhotoStore, safe_name
-from .links import is_short_link, mobile_blog_url, parse_place_url
+from .links import is_short_link, mobile_blog_url, parse_blog_url, parse_place_url
+from .naver_api import BlogSearch
+from .place_info import area_tokens, fetch_place, norm
 from .reviews import extract_blog_reviews, extract_visitor_reviews, find_place_name
 
 BROWSER_CHANNELS = ("msedge", "chrome")
@@ -58,7 +64,11 @@ class JobOptions:
     include_visitor: bool = False
     headless: bool = False
     min_width: int = 300
-    max_reviews: int = 300     # 목록에서 확인할 최대 리뷰 수 (블로그/방문자 각각)
+    max_reviews: int = 300     # 확인할 최대 블로그 글 수 (browser 방식은 목록 리뷰 수)
+    mode: str = "api"          # "api" | "browser"
+    client_id: str = ""
+    client_secret: str = ""
+    place_name: str = ""       # 상호명 직접 지정 (자동으로 못 찾을 때)
 
 
 class StopRequested(Exception):
@@ -72,9 +82,11 @@ class Job:
         self.progress = progress or (lambda done, total: None)
         self.stop_event = stop_event
         self.debug_dir = os.path.join(opts.out_dir, "_진단")
-        self.stats = {"saved": 0, "exists": 0, "dup": 0, "small": 0, "fail": 0}
+        self.stats = {"saved": 0, "exists": 0, "dup": 0, "small": 0, "fail": 0, "other": 0}
+        self._verify = None        # api 방식: 이 가게 글인지 확인하는 함수
         self.context_hook = None   # 테스트용: 브라우저 컨텍스트 준비 후 호출
         self.store_session = None  # 테스트용: 이미지 다운로드 세션 교체
+        self.api_session = None    # 테스트용: 공식 API 세션 교체
         self.http = requests.Session()
         self.http.headers.update({"User-Agent": UA_MOBILE, "Accept-Language": "ko-KR,ko;q=0.9"})
 
@@ -101,10 +113,102 @@ class Job:
 
     # ---------- 실행 ----------
     def run(self):
+        self.log(f"기간: {self.o.start} ~ {self.o.end}")
+        folder = self._run_api() if self.o.mode == "api" else self._run_browser()
+        s = self.stats
+        self.log(f"완료 — 새로 저장 {s['saved']}장, 이미 있음 {s['exists']}, 중복 {s['dup']}, "
+                 f"작은 이미지 제외 {s['small']}, 실패 {s['fail']}"
+                 + (f", 다른 가게 글 제외 {s['other']}개" if self.o.mode == "api" else ""))
+        return folder
+
+    def _run_api(self):
+        o = self.o
+        api = BlogSearch(o.client_id.strip(), o.client_secret.strip(), session=self.api_session)
+        ptype = pid = None
+        if o.link.strip():
+            ptype, pid = self._resolve_place_http(o.link)
+            self.log(f"플레이스 ID: {pid}")
+        info = fetch_place(self.http, ptype or "place", pid, self.log) if pid else {"name": "", "address": "", "blog_items": []}
+        name = o.place_name.strip() or info["name"]
+        if not name:
+            raise RuntimeError("상호명을 찾지 못했습니다. 창의 '상호명' 칸에 가게 이름을 직접 입력하고 다시 실행하세요.")
+        address = info["address"]
+        self.log(f"상호명: {name} / 주소: {address or '(확인 못 함)'}")
+
+        cands = {}
+        for it in info["blog_items"]:  # 플레이스 화면에 연결된 블로그리뷰 = 확실한 글
+            it["verified"] = True
+            cands[it["key"]] = it
+        if cands:
+            self.log(f"플레이스 화면의 블로그리뷰 {len(cands)}개 확인")
+
+        queries = [name] + [f"{name} {t}" for t in area_tokens(address)[:2]]
+        for q in dict.fromkeys(queries):
+            self.check_stop()
+            before = len(cands)
+            for r in api.iter_recent(q, o.start):
+                if r["postdate"] and r["postdate"] > o.end:
+                    continue
+                blog_id, log_no = parse_blog_url(r["link"])
+                if not blog_id:
+                    continue
+                key = f"{blog_id}/{log_no}"
+                cands.setdefault(key, {"key": key, "blog_id": blog_id, "log_no": log_no, "url": r["link"],
+                                       "title": r["title"], "author": r["blogger"],
+                                       "date_text": r["postdate"].isoformat() if r["postdate"] else ""})
+                if len(cands) >= o.max_reviews:
+                    break
+            self.log(f"공식 API 검색 「{q}」 — 새 후보 {len(cands) - before}개")
+            if len(cands) >= o.max_reviews:
+                self.log(f"후보가 최대 확인 수({o.max_reviews})에 도달 — 검색 종료")
+                break
+        self.log(f"공식 API {api.calls}회 호출, 후보 블로그 글 {len(cands)}개")
+
+        self._verify = lambda it, post: self._matches_place(it, post, name, pid, address)
+        folder = os.path.join(o.out_dir, safe_name(name, 60))
+        store = PhotoStore(folder, min_width=o.min_width, session=self.store_session)
+        self.log(f"저장 폴더: {folder}")
+        try:
+            self._download_blogs(store, list(cands.values()))
+        finally:
+            store.flush()
+        return folder
+
+    @staticmethod
+    def _matches_place(it, post, name, pid, address):
+        """검색 결과가 정말 이 가게 글인지: 지도 첨부(플레이스 ID) / 제목에 상호명 / 본문에 상호명+동네."""
+        if it.get("verified"):
+            return True
+        if pid and re.search(rf"(?<!\d){pid}(?!\d)", post.html or ""):
+            return True
+        n = norm(name)
+        if not n:
+            return False
+        if n in norm(post.title) or n in norm(it.get("title")):
+            return True
+        body = norm(post.text)
+        if n not in body:
+            return False
+        areas = [norm(t) for t in area_tokens(address)]
+        return any(a and a in body for a in areas) if areas else body.count(n) >= 2
+
+    def _resolve_place_http(self, link):
+        link = link.strip()
+        if not link.startswith("http"):
+            link = "https://" + link
+        ptype, pid = parse_place_url(link)
+        if pid:
+            return ptype, pid
+        for u in self._redirect_chain(link):
+            ptype, pid = parse_place_url(u)
+            if pid:
+                return ptype, pid
+        raise RuntimeError("링크에서 플레이스를 찾지 못했습니다. 링크를 확인하거나, 링크를 비우고 상호명만 입력하세요.")
+
+    def _run_browser(self):
         from playwright.sync_api import sync_playwright
 
         o = self.o
-        self.log(f"기간: {o.start} ~ {o.end}")
         with sync_playwright() as pw:
             browser = self._launch(pw)
             try:
@@ -133,9 +237,6 @@ class Job:
                 self._download_visitors(store, visitor_items)
         finally:
             store.flush()
-        s = self.stats
-        self.log(f"완료 — 새로 저장 {s['saved']}장, 이미 있음 {s['exists']}, 중복 {s['dup']}, "
-                 f"작은 이미지 제외 {s['small']}, 실패 {s['fail']}")
         return folder
 
     def _launch(self, pw):
@@ -389,6 +490,9 @@ class Job:
             elif html is None:
                 self.stats["fail"] += 1
                 continue
+            if self._verify and not self._verify(it, post):
+                self.stats["other"] += 1
+                continue
             d = post.date or parse_kr_date(it.get("date_text"))
             if d is None:
                 self.log(f"작성일 확인 불가 — 건너뜀: {mobile_blog_url(it['blog_id'], it['log_no'])}")
@@ -411,6 +515,8 @@ class Job:
                 store.flush()
             time.sleep(0.3)
         self.progress(len(candidates), len(candidates))
+        if self.stats["other"]:
+            self.log(f"상호명·지도가 맞지 않아 다른 가게 글로 보고 건너뛴 글: {self.stats['other']}개")
 
     def _fetch_blog(self, it):
         url = mobile_blog_url(it["blog_id"], it["log_no"])

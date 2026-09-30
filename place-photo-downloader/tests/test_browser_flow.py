@@ -99,7 +99,8 @@ def test_full_flow(tmp_path):
 
     logs = []
     opts = JobOptions(link="https://naver.me/xa5WfSO3", start=date(2026, 7, 1), end=date(2026, 9, 30),
-                      out_dir=str(tmp_path), include_visitor=True, headless=True, max_reviews=50)
+                      out_dir=str(tmp_path), include_visitor=True, headless=True, max_reviews=50,
+                      mode="browser")
     job = Job(opts, log=logs.append, stop_event=threading.Event())
     job.context_hook = hook
     job.http = FakeHttp()
