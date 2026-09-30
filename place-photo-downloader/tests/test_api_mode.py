@@ -1,4 +1,5 @@
 """공식 API 방식 흐름 (네트워크 없이 가짜 응답)."""
+import hashlib
 import io
 import json
 import os
@@ -55,7 +56,11 @@ BLOGS = {
 
 class R:
     def __init__(self, status=200, text="", content=b"", ctype="text/html", js=None):
-        self.status_code, self.text, self.content, self._js = status, text, content, js
+        # 실제 requests처럼: charset 없는 응답은 text 가 latin-1 로 깨져 보인다
+        self.content = content or text.encode("utf-8")
+        self.text = self.content.decode("latin-1") if text else ""
+        self.encoding = "ISO-8859-1"
+        self.status_code, self._js = status, js
         self.headers = {"Content-Type": ctype}
 
     def json(self):
@@ -79,7 +84,7 @@ class FakeHttp:
             return R(200, BLOGS[url])
         if "pstatic.net" in url and "?" not in url:
             buf = io.BytesIO()
-            Image.new("RGB", (800, 600), (abs(hash(url)) % 255, 1, 1)).save(buf, "JPEG")
+            Image.new("RGB", (800, 600), tuple(hashlib.md5(url.encode()).digest()[:3])).save(buf, "JPEG")
             return R(200, content=buf.getvalue(), ctype="image/jpeg")
         return R(404)
 

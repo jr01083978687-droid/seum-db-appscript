@@ -49,13 +49,15 @@ def fetch_place(session, ptype, pid, log):
         if r.status_code != 200:
             log(f"플레이스 정보 응답 {r.status_code}: {url}")
             continue
-        state = extract_apollo_state(r.text)
+        # 응답 헤더에 charset이 없으면 requests가 latin-1로 읽어 한글이 깨진다 → UTF-8로 직접 디코딩
+        text = r.content.decode("utf-8", "replace")
+        state = extract_apollo_state(text)
         if state:
             info["name"] = info["name"] or find_place_name(state, state, pid)
             info["address"] = info["address"] or find_address(state, pid)
             if path == "review/ugc":
                 info["blog_items"] = extract_blog_reviews(state, state)
-        info["name"] = info["name"] or og_title_name(r.text)
+        info["name"] = info["name"] or og_title_name(text)
     return info
 
 

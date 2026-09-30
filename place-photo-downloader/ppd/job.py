@@ -523,8 +523,8 @@ class Job:
         for attempt in range(3):
             try:
                 r = self.http.get(url, timeout=20)
-                if r.status_code == 200 and r.text:
-                    return r.text
+                if r.status_code == 200 and r.content:
+                    return r.content.decode(r.encoding if r.encoding and r.encoding.lower() != "iso-8859-1" else "utf-8", "replace")
                 self.log(f"블로그 글 응답 {r.status_code}: {url}")
             except requests.RequestException as e:
                 self.log(f"블로그 글 요청 실패({attempt + 1}/3): {e}")

@@ -1,4 +1,5 @@
 """가짜 네이버 페이지로 브라우저 수집 흐름 전체를 검증한다 (실제 네이버 접속 없음)."""
+import hashlib
 import io
 import json
 import os
@@ -67,7 +68,9 @@ BLOGS = {
 
 class R:
     def __init__(self, status, text="", content=b"", ctype="text/html"):
-        self.status_code, self.text, self.content = status, text, content
+        self.status_code, self.text = status, text
+        self.content = content or text.encode("utf-8")
+        self.encoding = "utf-8"
         self.headers = {"Content-Type": ctype}
 
 
@@ -81,7 +84,7 @@ class FakeHttp:
             return R(200, BLOGS[url])
         if "pstatic.net" in url and "?" not in url:
             buf = io.BytesIO()
-            Image.new("RGB", (900, 600), (hash(url) % 255, 10, 10)).save(buf, "JPEG")
+            Image.new("RGB", (900, 600), tuple(hashlib.md5(url.encode()).digest()[:3])).save(buf, "JPEG")
             return R(200, content=buf.getvalue(), ctype="image/jpeg")
         return R(404)
 
