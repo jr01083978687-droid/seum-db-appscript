@@ -4,6 +4,8 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 d = sys.argv[1] if len(sys.argv) > 1 else "output/_진단"
 if not os.path.isdir(d):
     print("진단 폴더 없음"); sys.exit(0)
@@ -16,6 +18,17 @@ for name in sorted(os.listdir(d)):
         for i, obj in enumerate(data):
             if isinstance(obj, dict):
                 print(f"-- dump[{i}] keys:", list(obj.keys())[:60])
+        from ppd.reviews import extract_blog_reviews, extract_visitor_reviews
+        for i, obj in enumerate(data):
+            if not isinstance(obj, dict):
+                continue
+            for k, v in obj.items():
+                if k.startswith(("FsasReview", "VisitorReview:", "ROOT_QUERY")):
+                    print(f"## {k}")
+                    print(json.dumps(v, ensure_ascii=False)[:2500])
+            refs = obj
+            print("-- extract_blog_reviews:", json.dumps(extract_blog_reviews(obj, refs), ensure_ascii=False)[:3000])
+            print("-- extract_visitor_reviews:", json.dumps(extract_visitor_reviews(obj, refs), ensure_ascii=False)[:1500])
         hits = []
 
         def walk(o, path):
@@ -29,7 +42,7 @@ for name in sorted(os.listdir(d)):
                     walk(v, f"{path}[{i}]")
         walk(data, "$")
         print(f"-- blog/pstatic 포함 객체 {len(hits)}개. 앞 4개:")
-        for p, o in hits[:4]:
+        for p, o in hits[:0]:
             print(p); print(json.dumps(o, ensure_ascii=False)[:1500])
     else:
         body = re.sub(r"<script.*?</script>|<style.*?</style>", "", text, flags=re.S)
