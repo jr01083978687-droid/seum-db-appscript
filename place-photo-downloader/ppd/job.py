@@ -176,21 +176,29 @@ class Job:
 
     @staticmethod
     def _matches_place(it, post, name, pid, address):
-        """검색 결과가 정말 이 가게 글인지: 지도 첨부(플레이스 ID) / 제목에 상호명 / 본문에 상호명+동네."""
+        """검색 결과가 정말 이 가게 글인지 판정. 맞으면 이유 문자열, 아니면 None.
+
+        - 플레이스 화면에 연결된 리뷰 / 본문에 이 플레이스 지도 첨부 / 제목에 상호명
+        - 본문: 상호명 2회 이상 + 도로명·동 일치, 또는 상호명 3회 이상
+          ("은평구" 같은 넓은 지역명은 근처 다른 가게 글도 통과시켜서 쓰지 않는다)
+        """
         if it.get("verified"):
-            return True
+            return "플레이스 리뷰"
         if pid and re.search(rf"(?<!\d){pid}(?!\d)", post.html or ""):
-            return True
+            return "지도"
         n = norm(name)
         if not n:
-            return False
+            return None
         if n in norm(post.title) or n in norm(it.get("title")):
-            return True
+            return "제목"
         body = norm(post.text)
-        if n not in body:
-            return False
-        areas = [norm(t) for t in area_tokens(address)]
-        return any(a and a in body for a in areas) if areas else body.count(n) >= 2
+        count = body.count(n)
+        areas = [norm(t) for t in area_tokens(address) if not t.endswith(("구", "시", "군"))]
+        if count >= 2 and any(a and a in body for a in areas):
+            return "본문+주소"
+        if count >= 3:
+            return "본문"
+        return None
 
     def _resolve_place_http(self, link):
         link = link.strip()
@@ -490,7 +498,8 @@ class Job:
             elif html is None:
                 self.stats["fail"] += 1
                 continue
-            if self._verify and not self._verify(it, post):
+            why = self._verify(it, post) if self._verify else None
+            if self._verify and not why:
                 self.stats["other"] += 1
                 continue
             d = post.date or parse_kr_date(it.get("date_text"))
@@ -499,7 +508,7 @@ class Job:
                 continue
             if not self.in_range(d):
                 continue
-            label = f"{d:%Y-%m-%d} {it['blog_id']} 「{(post.title or it.get('title') or '')[:30]}」"
+            label = f"{d:%Y-%m-%d} {it['blog_id']} 「{(post.title or it.get('title') or '')[:30]}」" + (f" [{why}]" if why else "")
             if not post.photos:
                 self.log(f"{label} — 사진 없음")
                 continue

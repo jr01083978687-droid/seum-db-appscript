@@ -135,3 +135,19 @@ def test_helpers():
     assert parse_postdate("20260930") == date(2026, 9, 30) and parse_postdate("") is None
     assert "은평구" in area_tokens("서울 은평구 연서로29길 14-12")
     assert extract_apollo_state(PLACE_HTML)[f"PlaceDetailBase:{PID}"]["name"] == "아우성황소곱창"
+
+
+def test_nearby_other_shop_rejected():
+    """실제 사례: 근처 다른 가게 후기가 '은평구' + 상호명 1회 언급으로 통과하던 문제."""
+    from ppd.blog_parser import BlogPost
+
+    other = BlogPost("[서울/은평구] 연신내 맛집 추천 동궁찜닭", None, [],
+                     text="은평구 연신내 동궁찜닭 후기. 근처 아우성황소곱창 도 유명해요")
+    same = BlogPost("연신내 곱창 후기", None, [],
+                    text="아우성황소곱창 다녀옴. 연서로29길 골목. 아우성황소곱창 추천")
+    listicle = BlogPost("서울 곱창집 베스트 10", None, [], text="1. 아우성황소곱창 (은평구) 2. 다른집")
+    addr = "서울 은평구 연서로29길 14-12"
+    m = Job._matches_place
+    assert m({}, other, "아우성황소곱창", PID, addr) is None
+    assert m({}, listicle, "아우성황소곱창", PID, addr) is None
+    assert m({}, same, "아우성황소곱창", PID, addr) == "본문+주소"
