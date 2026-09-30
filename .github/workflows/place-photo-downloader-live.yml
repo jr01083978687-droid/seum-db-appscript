@@ -1,24 +1,11 @@
 name: place-photo-downloader live test
 
+# live-test.json 을 수정해서 푸시하면 실제 네이버 대상으로 실행된다.
 on:
-  workflow_dispatch:
-    inputs:
-      link:
-        description: "플레이스 링크"
-        required: true
-        default: "https://naver.me/xa5WfSO3"
-      start:
-        description: "시작일 (YYYY-MM-DD)"
-        required: false
-        default: ""
-      end:
-        description: "종료일 (YYYY-MM-DD)"
-        required: false
-        default: ""
-      visitor:
-        description: "방문자리뷰 포함"
-        type: boolean
-        default: true
+  push:
+    paths:
+      - "place-photo-downloader/live-test.json"
+      - ".github/workflows/place-photo-downloader-live.yml"
 
 jobs:
   live:
@@ -37,11 +24,10 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: |
-          $args = @("${{ inputs.link }}", "--out", "output", "--max-reviews", "60")
-          if ("${{ inputs.start }}") { $args += @("--start", "${{ inputs.start }}") }
-          if ("${{ inputs.end }}") { $args += @("--end", "${{ inputs.end }}") }
-          if ("${{ inputs.visitor }}" -eq "true") { $args += "--visitor" }
-          python cli.py @args
+          $cfg = Get-Content live-test.json -Raw -Encoding utf8 | ConvertFrom-Json
+          $a = @($cfg.link, "--out", "output", "--max-reviews", "$($cfg.max_reviews)", "--start", $cfg.start, "--end", $cfg.end)
+          if ($cfg.visitor) { $a += "--visitor" }
+          python cli.py @a
           "exit=$LASTEXITCODE"
       - name: Report
         if: always()
