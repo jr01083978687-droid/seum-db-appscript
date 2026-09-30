@@ -1,0 +1,62 @@
+name: place-photo-downloader live test
+
+on:
+  workflow_dispatch:
+    inputs:
+      link:
+        description: "플레이스 링크"
+        required: true
+        default: "https://naver.me/xa5WfSO3"
+      start:
+        description: "시작일 (YYYY-MM-DD)"
+        required: false
+        default: ""
+      end:
+        description: "종료일 (YYYY-MM-DD)"
+        required: false
+        default: ""
+      visitor:
+        description: "방문자리뷰 포함"
+        type: boolean
+        default: true
+
+jobs:
+  live:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: place-photo-downloader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          $args = @("${{ inputs.link }}", "--out", "output", "--max-reviews", "60")
+          if ("${{ inputs.start }}") { $args += @("--start", "${{ inputs.start }}") }
+          if ("${{ inputs.end }}") { $args += @("--end", "${{ inputs.end }}") }
+          if ("${{ inputs.visitor }}" -eq "true") { $args += "--visitor" }
+          python cli.py @args
+          "exit=$LASTEXITCODE"
+      - name: Report
+        if: always()
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          Get-ChildItem -Recurse output -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300
+          Get-ChildItem output\_진단 -ErrorAction SilentlyContinue | ForEach-Object {
+            "===== $($_.Name) ====="
+            (Get-Content $_.FullName -Raw -Encoding utf8).Substring(0, [Math]::Min(6000, (Get-Item $_.FullName).Length))
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-test-output
+          path: place-photo-downloader/output
+          retention-days: 7
