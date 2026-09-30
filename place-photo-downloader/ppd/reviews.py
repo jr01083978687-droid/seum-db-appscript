@@ -47,8 +47,9 @@ def _first_str(d, keys):
 def extract_blog_reviews(obj, refs=None):
     out = {}
     for d in walk_dicts(obj, refs):
-        if str(d.get("type", "")).lower() == "cafe":
-            continue
+        kind = str(d.get("type", "")).lower()
+        if kind != "blog" and "review" not in str(d.get("__typename", "")).lower():
+            continue  # 리뷰가 아닌 링크(가게 공식 블로그 등)는 제외
         for k in URL_KEYS:
             v = d.get(k)
             if isinstance(v, str) and "blog.naver.com" in v:
@@ -60,6 +61,9 @@ def extract_blog_reviews(obj, refs=None):
                     item["title"] = item["title"] or _first_str(d, TITLE_KEYS)
                     item["author"] = item["author"] or _first_str(d, AUTHOR_KEYS[:-1])
                     item["date_text"] = item["date_text"] or _first_str(d, DATE_KEYS)
+                    thumbs = d.get("thumbnailUrlList")
+                    if isinstance(thumbs, list) and not item.get("thumbs"):
+                        item["thumbs"] = [t.split("#")[0] for t in thumbs if isinstance(t, str) and t.startswith("http")]
                 break
     return list(out.values())
 

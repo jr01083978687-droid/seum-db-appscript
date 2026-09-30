@@ -141,3 +141,24 @@ def test_store_dedup_small_and_rerun(tmp_path):
     assert store2.save("u1", ["u1"], "x", "r")[0] == "exists"
     assert store2.save("u3", ["u3"], "x", "r")[0] == "exists"
     assert sess2.calls == []  # 재실행 시 네트워크 요청 없음
+
+
+def test_real_shaped_fsas_state():
+    """2026-09 실제 m.place 응답 모양 (라이브 테스트에서 확인)."""
+    state = {
+        "PlaceDetailBase:20869021": {"id": "20869021", "name": "아우성황소곱창",
+                                     "homepages": {"etc": [{"url": "https://blog.naver.com/gusfo_official/224264167819"}]}},
+        "FsasReview:blog_쿠키댕댕_224423272854_x": {
+            "__typename": "FsasReview", "name": "쿠키댕댕", "type": "blog",
+            "url": "https://m.blog.naver.com/vzpf896g/224423272854", "title": "직접 겪은 소대창구이",
+            "date": "4일 전", "authorName": "쿠키댕댕", "createdString": "26.9.26.금",
+            "thumbnailUrlList": ["http://blogfiles.naver.net/A/_rmt_0.jpg#1500x1877",
+                                 "http://blogfiles.naver.net/A/_rmt_1.jpg#1500x2000"]},
+        "FsasReview:cafe_x_4440_y": {
+            "__typename": "FsasReview", "type": "cafe", "url": "https://m.cafe.naver.com/wnahdskfk/4440"},
+    }
+    blogs = extract_blog_reviews(state, state)
+    assert [b["key"] for b in blogs] == ["vzpf896g/224423272854"]  # 공식 블로그·카페 제외
+    assert blogs[0]["thumbs"] == ["http://blogfiles.naver.net/A/_rmt_0.jpg", "http://blogfiles.naver.net/A/_rmt_1.jpg"]
+    assert parse_kr_date(blogs[0]["date_text"], TODAY) == date(2026, 9, 26)
+    assert find_place_name(state, state, "20869021") == "아우성황소곱창"

@@ -173,7 +173,8 @@ class Job:
             page.goto(link, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:  # noqa: BLE001 - 오류 페이지라도 이동한 주소를 확인한다
             self.log(f"링크 열기 오류: {str(e).splitlines()[0]}")
-        self._wait_captcha(page)
+        if not self._wait_captcha(page):
+            raise RuntimeError("네이버 보안확인 때문에 링크를 열지 못했습니다. 잠시 후 다시 시도하거나 창 숨기기를 끄고 실행하세요.")
         # naver.me → map.naver.com 은 스크립트로 한 번 더 이동하는 경우가 있어 잠시 기다린다
         for _ in range(20):
             ptype, pid = parse_place_url(page.url)
@@ -243,7 +244,7 @@ class Job:
                     self.log(f"페이지 응답 {resp.status}: {url}")
             except Exception as e:  # noqa: BLE001 - 차단/오류 페이지도 진단 자료를 남긴다
                 self.log(f"페이지 열기 오류: {str(e).splitlines()[0]}")
-            self._wait_captcha(page)
+            blocked = not self._wait_captcha(page)
             page.wait_for_timeout(2500)
 
             state = page.evaluate("() => window.__APOLLO_STATE__ || null")
@@ -254,21 +255,21 @@ class Job:
             if not place_name:
                 place_name = self._title_name(page)
 
-            if sort_label:
+            if sort_label and not blocked:
                 self._drain(pending, items, extractor, raw_dumps)
                 if page.evaluate(_CLICK_TEXT_JS, sort_label):
                     self.log(f"'{sort_label}' 정렬 적용")
                     page.wait_for_timeout(2000)
-                    items.clear()  # 정렬이 바뀌었으니 이후 응답 순서대로 새로 쌓는다
 
             no_growth = 0
-            while len(items) < self.o.max_reviews:
+            while not blocked and len(items) < self.o.max_reviews:
                 self.check_stop()
                 before = len(items)
                 self._drain(pending, items, extractor, raw_dumps)
-                if dom_blog_links:
+                if dom_blog_links and not items:
+                    # JSON에서 못 찾았을 때만 화면의 블로그 링크를 쓴다 (가게 공식 블로그 링크 혼입 방지)
                     self._merge(items, extract_blog_reviews({"links": [
-                        {"url": h} for h in page.evaluate(_BLOG_LINKS_JS)]}))
+                        {"type": "blog", "url": h} for h in page.evaluate(_BLOG_LINKS_JS)]}))
                 self.progress(len(items), self.o.max_reviews)
                 if self._tail_is_old(items, old_streak_stop):
                     self.log("시작일보다 오래된 리뷰까지 도달 — 목록 확인 종료")
@@ -282,8 +283,11 @@ class Job:
                 if not page.evaluate(_CLICK_MORE_JS):
                     page.mouse.wheel(0, 4000)
                 page.wait_for_timeout(1500)
-                self._wait_captcha(page)
+                blocked = not self._wait_captcha(page)
             self._drain(pending, items, extractor, raw_dumps)
+            if blocked:
+                self.log(f"보안확인 때문에 목록 확인을 멈춥니다 — 지금까지 찾은 {len(items)}개로 진행")
+                self.dump_debug(("blog" if dom_blog_links else "visitor") + "_캡차.html", page.content())
         except Exception:
             kind = "blog" if dom_blog_links else "visitor"
             try:
@@ -348,9 +352,10 @@ class Job:
             return any(k in body for k in ("보안 확인", "자동입력 방지", "캡차", "정답을 입력"))
 
         if not is_captcha():
-            return
+            return True
         if self.o.headless:
-            raise RuntimeError("네이버 보안확인(캡차)이 떴습니다. '브라우저 숨기기'를 끄고 다시 실행한 뒤 창에서 직접 풀어주세요.")
+            self.log("⚠ 네이버 보안확인(캡차)이 떴습니다. 창 숨김 모드라 풀 수 없습니다 — '브라우저 창 숨기기'를 끄면 직접 풀 수 있습니다.")
+            return False
         self.log(f"⚠ 네이버 보안확인 화면이 떴습니다. 브라우저 창에서 직접 풀어주세요 (최대 {CAPTCHA_WAIT_SEC}초 대기)")
         deadline = time.time() + CAPTCHA_WAIT_SEC
         while time.time() < deadline:
@@ -359,8 +364,9 @@ class Job:
             if not is_captcha():
                 self.log("보안확인 통과")
                 page.wait_for_timeout(1500)
-                return
-        raise RuntimeError("보안확인 대기 시간이 지났습니다.")
+                return True
+        self.log("보안확인 대기 시간이 지났습니다.")
+        return False
 
     # ---------- 다운로드 ----------
     def _download_blogs(self, store, items):
@@ -375,10 +381,14 @@ class Job:
             self.check_stop()
             self.progress(i - 1, len(candidates))
             html = self._fetch_blog(it)
-            if html is None:
+            post = blog_parser.parse_blog_html(html) if html else blog_parser.BlogPost("", None, [])
+            if not post.photos and it.get("thumbs"):
+                # 본문을 못 읽으면 리뷰 목록에 딸려온 사진 주소로 대신 받는다
+                self.log(f"본문 사진을 못 읽어 목록의 사진 {len(it['thumbs'])}장으로 대체: {it['blog_id']}")
+                post.photos = [blog_parser.BlogPhoto(u, False, u) for u in it["thumbs"]]
+            elif html is None:
                 self.stats["fail"] += 1
                 continue
-            post = blog_parser.parse_blog_html(html)
             d = post.date or parse_kr_date(it.get("date_text"))
             if d is None:
                 self.log(f"작성일 확인 불가 — 건너뜀: {mobile_blog_url(it['blog_id'], it['log_no'])}")

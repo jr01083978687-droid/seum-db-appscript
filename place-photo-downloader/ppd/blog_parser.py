@@ -18,6 +18,8 @@ PHOTO_HOSTS = (
     "blogfiles.pstatic.net",
     "mblogthumb-phinf.pstatic.net",
     "blogthumb.pstatic.net",
+    "blogfiles.naver.net",
+    "postfiles.naver.net",
 )
 # 동영상 썸네일 호스트 (phinf 계열 전반)
 VIDEO_THUMB_HOST_SUFFIX = ".pstatic.net"
