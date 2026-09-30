@@ -162,7 +162,17 @@ class Job:
         if pid:
             return ptype, pid
         self.log("링크 열어서 플레이스 주소 확인 중…")
-        page.goto(link, wait_until="domcontentloaded", timeout=30000)
+        # 1) 단축링크는 HTTP 리다이렉트 주소만 읽어도 ID가 나오는 경우가 많다
+        chain = self._redirect_chain(link)
+        for u in chain:
+            ptype, pid = parse_place_url(u)
+            if pid:
+                return ptype, pid
+        # 2) 스크립트 이동이 필요한 경우 브라우저로 연다
+        try:
+            page.goto(link, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:  # noqa: BLE001 - 오류 페이지라도 이동한 주소를 확인한다
+            self.log(f"링크 열기 오류: {str(e).splitlines()[0]}")
         self._wait_captcha(page)
         # naver.me → map.naver.com 은 스크립트로 한 번 더 이동하는 경우가 있어 잠시 기다린다
         for _ in range(20):
@@ -173,9 +183,28 @@ class Job:
         m = re.search(r"place(?:\.naver\.com/[a-z]+|/)/?(\d{6,})", page.content())
         if m:
             return "place", m.group(1)
-        self.dump_debug("링크해석실패.txt", f"입력: {link}\n최종 URL: {page.url}\n")
+        self.dump_debug("링크해석실패.txt", f"입력: {link}\n리다이렉트: {chain}\n최종 URL: {page.url}\n")
         raise RuntimeError(f"플레이스 ID를 찾지 못했습니다. 최종 주소: {page.url}"
                            + (" (단축링크)" if is_short_link(link) else ""))
+
+    def _redirect_chain(self, link):
+        chain, url = [], link
+        for _ in range(8):
+            try:
+                r = self.http.get(url, allow_redirects=False, timeout=15)
+            except requests.RequestException as e:
+                self.log(f"링크 요청 실패: {e}")
+                break
+            loc = r.headers.get("Location")
+            self.log(f"  {r.status_code} {url}" + (f" → {loc}" if loc else ""))
+            if not loc:
+                m = re.search(r"""(?:location\.(?:href|replace)\s*[=(]\s*|url=)["']?([^"' >)]+)""", r.text or "", re.I)
+                if m and m.group(1).startswith("http"):
+                    chain.append(m.group(1))
+                break
+            url = requests.compat.urljoin(url, loc)
+            chain.append(url)
+        return chain
 
     # ---------- 목록 수집 ----------
     def _collect_blog_list(self, page, ptype, pid):
@@ -206,7 +235,12 @@ class Job:
         page.on("response", on_response)
         items, place_name, raw_dumps = {}, "", []
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try:
+                resp = page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                if resp is not None and resp.status >= 400:
+                    self.log(f"페이지 응답 {resp.status}: {url}")
+            except Exception as e:  # noqa: BLE001 - 차단/오류 페이지도 진단 자료를 남긴다
+                self.log(f"페이지 열기 오류: {str(e).splitlines()[0]}")
             self._wait_captcha(page)
             page.wait_for_timeout(2500)
 

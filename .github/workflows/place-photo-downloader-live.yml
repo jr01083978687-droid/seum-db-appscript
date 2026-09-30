@@ -19,6 +19,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - name: Probe Naver
+        shell: pwsh
+        run: |
+          $ua = "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+          foreach ($u in @("https://naver.me/xa5WfSO3", "https://m.place.naver.com/", "https://m.blog.naver.com/", "https://pcmap-api.place.naver.com/graphql")) {
+            "---- $u"
+            curl.exe -s -o NUL -A $ua -w "%{http_code} redirect=%{redirect_url}`n" $u
+          }
+          "---- naver.me headers"
+          curl.exe -sI -A $ua https://naver.me/xa5WfSO3
       - name: Run
         shell: pwsh
         env:

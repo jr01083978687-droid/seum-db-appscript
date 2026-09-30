@@ -75,7 +75,7 @@ class FakeHttp:
     def __init__(self):
         self.headers, self.calls = {}, []
 
-    def get(self, url, headers=None, timeout=None):
+    def get(self, url, headers=None, timeout=None, allow_redirects=True):
         self.calls.append(url)
         if url in BLOGS:
             return R(200, BLOGS[url])
