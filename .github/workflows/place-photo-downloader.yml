@@ -1,0 +1,47 @@
+name: place-photo-downloader (Windows exe)
+
+on:
+  push:
+    paths:
+      - "place-photo-downloader/**"
+      - ".github/workflows/place-photo-downloader.yml"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: place-photo-downloader
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Unit tests
+        run: python -m pytest -q tests
+
+      - name: Build exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name PlacePhotoDownloader
+          --collect-all playwright
+          app.py
+
+      - name: Self-test exe (launch Edge inside the built exe)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\PlacePhotoDownloader.exe -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content dist\selftest.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlacePhotoDownloader-windows
+          path: place-photo-downloader/dist/PlacePhotoDownloader.exe
+          retention-days: 30
