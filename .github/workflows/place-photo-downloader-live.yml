@@ -19,7 +19,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - name: Probe photo quality
+        if: hashFiles('place-photo-downloader/probe.flag') != ''
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tools_probe_quality.py
       - name: Run
+        if: hashFiles('place-photo-downloader/probe.flag') == ''
         shell: pwsh
         env:
           PYTHONIOENCODING: utf-8
