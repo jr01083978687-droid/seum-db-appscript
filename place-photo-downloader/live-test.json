@@ -4,6 +4,6 @@
   "end": "2026-10-13",
   "mode": "api",
   "visitor": false,
-  "max_reviews": 300,
-  "run": 13
+  "max_reviews": 30,
+  "run": 14
 }

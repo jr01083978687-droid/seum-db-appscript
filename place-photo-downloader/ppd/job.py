@@ -505,6 +505,10 @@ class Job:
             why = self._verify(it, post) if self._verify else None
             if self._verify and not why:
                 self.stats["other"] += 1
+                if self.stats["other"] <= 8:  # 판정 근거를 남겨 오판을 점검할 수 있게 한다
+                    maps = sorted(set(re.findall(r'placeId(?:&quot;|["\'])?\s*:\s*(?:&quot;|["\'])?(\d{5,})', post.html or "")))
+                    self.log(f"  제외: {it['blog_id']}/{it['log_no']} 제목「{(post.title or it.get('title') or '')[:30]}」 "
+                             f"본문 {len(post.text)}자, 지도 {maps[:3]}, html {len(post.html or '')}자")
                 continue
             d = post.date or parse_kr_date(it.get("date_text"))
             if d is None:
