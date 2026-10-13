@@ -116,7 +116,7 @@ class Job:
         self.log(f"기간: {self.o.start} ~ {self.o.end}")
         folder = self._run_api() if self.o.mode == "api" else self._run_browser()
         s = self.stats
-        self.log(f"완료 — 새로 저장 {s['saved']}장, 이미 있음 {s['exists']}, 중복 {s['dup']}, "
+        self.log(f"완료 — 새로 저장 {s['saved']}장, 이미 있음 {s['exists']}, 같은 사진 제외 {s['dup']}, "
                  f"작은 이미지 제외 {s['small']}, 실패 {s['fail']}"
                  + (f", 다른 가게 글 제외 {s['other']}개" if self.o.mode == "api" else ""))
         return folder
@@ -186,6 +186,8 @@ class Job:
             self._download_blogs(store, list(cands.values()))
         finally:
             store.flush()
+        if store.quality_summary():
+            self.log(store.quality_summary())
         return folder
 
     @staticmethod
@@ -263,6 +265,8 @@ class Job:
                 self._download_visitors(store, visitor_items)
         finally:
             store.flush()
+        if store.quality_summary():
+            self.log(store.quality_summary())
         return folder
 
     def _launch(self, pw):

@@ -21,11 +21,30 @@ def safe_name(text, limit=40):
     return (text[:limit].strip() or "이름없음")
 
 
+SIMILAR_BITS = 4  # 이미지 지문(64비트) 차이가 이 이하면 같은 사진으로 본다
+
+
+def image_fingerprint(im):
+    """dHash: 크기·압축률이 달라도 같은 사진이면 거의 같은 64비트 값이 나온다."""
+    g = im.convert("L").resize((9, 8), Image.LANCZOS)
+    px = g.tobytes()  # L 모드: 픽셀당 1바이트
+    bits = 0
+    for row in range(8):
+        for col in range(8):
+            bits = (bits << 1) | (px[row * 9 + col] > px[row * 9 + col + 1])
+    return bits
+
+
+def _hamming(a, b):
+    return bin(a ^ b).count("1")
+
+
 class PhotoStore:
     """한 플레이스 폴더에 사진을 저장한다.
 
-    기록 파일(_다운로드기록.json)에 원본 URL과 내용 해시를 남겨,
-    다시 실행해도 같은 사진은 받지 않는다.
+    - 기록 파일(_다운로드기록.json)에 원본 URL·내용 해시·이미지 지문을 남겨 재실행 시 건너뛴다.
+    - 눈으로 같은 사진(크기만 다르거나 다시 저장된 것)은 하나만 남기고, 더 큰 해상도로 교체한다.
+    - 어떤 주소로 받았는지(원본/축소본)와 해상도를 집계한다.
     """
 
     def __init__(self, folder, min_width=300, session=None):
@@ -36,13 +55,14 @@ class PhotoStore:
         self._lock = threading.Lock()
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": UA_MOBILE})
-        self.manifest = {"urls": {}, "hashes": {}}
+        self.manifest = {"urls": {}, "hashes": {}, "prints": {}}
+        self.quality = {"원본": 0, "축소본": 0, "replaced": 0, "widths": []}
         if os.path.exists(self.manifest_path):
             try:
                 with open(self.manifest_path, encoding="utf-8") as f:
                     loaded = json.load(f)
-                self.manifest["urls"].update(loaded.get("urls", {}))
-                self.manifest["hashes"].update(loaded.get("hashes", {}))
+                for k in self.manifest:
+                    self.manifest[k].update(loaded.get(k, {}))
             except (ValueError, OSError):
                 pass
 
@@ -51,16 +71,16 @@ class PhotoStore:
         return bool(name) and (name.startswith("SKIP:") or os.path.exists(os.path.join(self.folder, name)))
 
     def save(self, url_key, candidates, base_name, referer):
-        """반환: ('saved'|'exists'|'dup'|'small'|'fail', 파일명 또는 사유)"""
+        """candidates[0] 이 원본 주소. 반환: ('saved'|'exists'|'dup'|'small'|'fail', 파일명 또는 사유)"""
         if self.already_have(url_key):
             return "exists", self.manifest["urls"][url_key]
 
-        data, last_err = None, ""
-        for url in candidates:
+        data, last_err, used = None, "", -1
+        for i, url in enumerate(candidates):
             try:
-                r = self.session.get(url, headers={"Referer": referer}, timeout=20)
+                r = self.session.get(url, headers={"Referer": referer}, timeout=30)
                 if r.status_code == 200 and r.content and r.headers.get("Content-Type", "image").startswith("image"):
-                    data = r.content
+                    data, used = r.content, i
                     break
                 last_err = f"HTTP {r.status_code}"
             except requests.RequestException as e:
@@ -70,7 +90,8 @@ class PhotoStore:
 
         try:
             with Image.open(io.BytesIO(data)) as im:
-                width, fmt = im.size[0], im.format
+                width, height, fmt = im.size[0], im.size[1], im.format
+                fp = image_fingerprint(im)
         except Exception:  # noqa: BLE001 - 이미지가 아니면 실패 처리
             return "fail", "이미지 형식 아님"
 
@@ -79,17 +100,64 @@ class PhotoStore:
             return "small", f"가로 {width}px"
 
         digest = hashlib.md5(data).hexdigest()
+        ext = _EXT_BY_FORMAT.get(fmt, ".jpg")
         with self._lock:
             dup = self.manifest["hashes"].get(digest)
             if dup and os.path.exists(os.path.join(self.folder, dup)):
                 self._remember(url_key, dup)
                 return "dup", dup
-            name = self._unique(base_name + _EXT_BY_FORMAT.get(fmt, ".jpg"))
+            similar = self._find_similar(fp, width / max(height, 1))
+            if similar:
+                name = self._maybe_upgrade(similar, data, ext, width, height, digest)
+                self._remember(url_key, name)
+                return "dup", name
+            name = self._unique(base_name + ext)
             with open(os.path.join(self.folder, name), "wb") as f:
                 f.write(data)
             self.manifest["hashes"][digest] = name
+            self.manifest["prints"][name] = {"fp": format(fp, "016x"), "w": width, "h": height}
             self._remember(url_key, name)
+            self.quality["원본" if used == 0 else "축소본"] += 1
+            self.quality["widths"].append(width)
         return "saved", name
+
+    def _find_similar(self, fp, ratio):
+        for name, info in self.manifest["prints"].items():
+            try:
+                other = int(info["fp"], 16)
+            except (KeyError, ValueError):
+                continue
+            other_ratio = info.get("w", 1) / max(info.get("h", 1), 1)
+            if _hamming(fp, other) <= SIMILAR_BITS and abs(ratio - other_ratio) < 0.05 \
+                    and os.path.exists(os.path.join(self.folder, name)):
+                return name
+        return None
+
+    def _maybe_upgrade(self, old_name, data, ext, width, height, digest):
+        """같은 사진이 더 큰 해상도로 다시 나오면 기존 파일을 교체한다 (파일명은 유지, 확장자만 맞춤)."""
+        info = self.manifest["prints"][old_name]
+        if width * height <= info.get("w", 0) * info.get("h", 0) * 1.1:
+            return old_name
+        new_name = os.path.splitext(old_name)[0] + ext
+        os.remove(os.path.join(self.folder, old_name))
+        with open(os.path.join(self.folder, new_name), "wb") as f:
+            f.write(data)
+        self.manifest["prints"].pop(old_name)
+        self.manifest["prints"][new_name] = {"fp": info["fp"], "w": width, "h": height}
+        self.manifest["hashes"] = {d: (new_name if n == old_name else n) for d, n in self.manifest["hashes"].items()}
+        self.manifest["hashes"][digest] = new_name
+        self.manifest["urls"] = {u: (new_name if n == old_name else n) for u, n in self.manifest["urls"].items()}
+        self.quality["replaced"] += 1
+        return new_name
+
+    def quality_summary(self):
+        q, ws = self.quality, sorted(self.quality["widths"])
+        if not ws:
+            return ""
+        mid = ws[len(ws) // 2]
+        return (f"화질 — 원본 주소로 받음 {q['원본']}장, 축소본으로 받음 {q['축소본']}장, "
+                f"가로 해상도 중간값 {mid}px (최소 {ws[0]} / 최대 {ws[-1]})"
+                + (f", 같은 사진을 더 큰 해상도로 교체 {q['replaced']}장" if q["replaced"] else ""))
 
     def _unique(self, name):
         stem, ext = os.path.splitext(name)

@@ -163,3 +163,40 @@ def test_real_shaped_fsas_state():
     assert blogs[0]["thumbs"] == ["http://blogfiles.naver.net/A/_rmt_0.jpg", "http://blogfiles.naver.net/A/_rmt_1.jpg"]
     assert parse_kr_date(blogs[0]["date_text"], TODAY) == date(2026, 9, 26)
     assert find_place_name(state, state, "20869021") == "아우성황소곱창"
+
+
+def _photo_jpeg(w, h, quality=90, seed=1):
+    """눈으로 구분되는 무늬가 있는 사진 (그라데이션 + 사각형)."""
+    im = Image.new("RGB", (w, h))
+    px = im.load()
+    for x in range(w):
+        for y in range(h):
+            px[x, y] = ((x * 255 // w + seed * 40) % 256, (y * 255 // h) % 256, (seed * 70) % 256)
+    from PIL import ImageDraw
+    ImageDraw.Draw(im).rectangle([w * seed // 7, h // 4, w * seed // 7 + w // 3, h // 2], fill=(255, 255, 255))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def test_visually_same_photo_kept_once_at_highest_resolution(tmp_path):
+    small = _photo_jpeg(966, 724, quality=70, seed=2)     # 축소·재압축본
+    big = _photo_jpeg(1932, 1448, quality=95, seed=2)     # 같은 사진 고해상도
+    other = _photo_jpeg(966, 724, seed=5)                 # 다른 사진
+    sess = FakeSession({"a": FakeResp(small), "b": FakeResp(big), "c": FakeResp(other)})
+    store = PhotoStore(str(tmp_path), session=sess)
+    assert store.save("a", ["a"], "2026-01-01_x_1_01", "r") == ("saved", "2026-01-01_x_1_01.jpg")
+    status, name = store.save("b", ["b"], "2026-01-02_y_2_01", "r")
+    assert status == "dup" and name == "2026-01-01_x_1_01.jpg"
+    with Image.open(tmp_path / name) as im:
+        assert im.size == (1932, 1448)                    # 더 큰 해상도로 교체됨
+    assert store.save("c", ["c"], "2026-01-03_z_3_01", "r")[0] == "saved"
+    store.flush()
+    assert sorted(f for f in os.listdir(tmp_path) if f.endswith(".jpg")) == ["2026-01-01_x_1_01.jpg", "2026-01-03_z_3_01.jpg"]
+    assert "원본 주소로 받음 2장" in store.quality_summary()
+
+
+def test_mobile_thumb_tries_original_server_first():
+    from ppd.blog_parser import BlogPhoto
+    ph = BlogPhoto("https://mblogthumb-phinf.pstatic.net/A/1.jpg", False, "")
+    assert ph.candidates()[0] == "https://postfiles.pstatic.net/A/1.jpg"

@@ -41,8 +41,12 @@ class BlogPhoto:
     raw_url: str = ""  # 본문에 적혀 있던 URL (원본 요청 실패 시 대체)
 
     def candidates(self):
-        """다운로드 시도 순서: 원본 → w966 → 본문 URL."""
-        out = [self.url, self.url + "?type=w966"]
+        """다운로드 시도 순서: 원본 → (모바일 썸네일이면 원본 서버로 바꾼 주소) → w966 → 본문 URL."""
+        out = [self.url]
+        if "mblogthumb-phinf.pstatic.net" in self.url:
+            # 모바일 썸네일 서버는 축소본을 준다 → 같은 경로의 원본 서버 주소를 먼저 시도
+            out.insert(0, self.url.replace("mblogthumb-phinf.pstatic.net", "postfiles.pstatic.net"))
+        out.append(self.url + "?type=w966")
         if self.raw_url and self.raw_url not in out:
             out.append(self.raw_url)
         return out

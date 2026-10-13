@@ -54,6 +54,18 @@ BLOGS = {
 }
 
 
+def _patterned(size, url):
+    """URL마다 눈으로 다른 무늬 사진 (단색이면 이미지 지문이 같아 같은 사진으로 판정됨)."""
+    from PIL import ImageDraw
+    d = hashlib.md5(url.encode()).digest()
+    im = Image.new("RGB", size, (d[0], d[1], d[2]))
+    draw = ImageDraw.Draw(im)
+    for i in range(0, 12, 2):
+        x, y = d[i] * size[0] // 256, d[i + 1] * size[1] // 256
+        draw.rectangle([x, y, x + size[0] // 5, y + size[1] // 5], fill=(255 - d[i], d[i + 1], 128))
+    return im
+
+
 class R:
     def __init__(self, status=200, text="", content=b"", ctype="text/html", js=None):
         # 실제 requests처럼: charset 없는 응답은 text 가 latin-1 로 깨져 보인다
@@ -84,7 +96,7 @@ class FakeHttp:
             return R(200, BLOGS[url])
         if "pstatic.net" in url and "?" not in url:
             buf = io.BytesIO()
-            Image.new("RGB", (800, 600), tuple(hashlib.md5(url.encode()).digest()[:3])).save(buf, "JPEG")
+            _patterned((800, 600), url).save(buf, "JPEG")
             return R(200, content=buf.getvalue(), ctype="image/jpeg")
         return R(404)
 
