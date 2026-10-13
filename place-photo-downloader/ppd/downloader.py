@@ -57,6 +57,7 @@ class PhotoStore:
         self.session.headers.update({"User-Agent": UA_MOBILE})
         self.manifest = {"urls": {}, "hashes": {}, "prints": {}}
         self.quality = {"원본": 0, "축소본": 0, "replaced": 0, "widths": []}
+        self.small_examples = []  # 작은 이미지로 판정된 응답 예시 (원인 진단용)
         if os.path.exists(self.manifest_path):
             try:
                 with open(self.manifest_path, encoding="utf-8") as f:
@@ -75,25 +76,33 @@ class PhotoStore:
         if self.already_have(url_key):
             return "exists", self.manifest["urls"][url_key]
 
-        data, last_err, used = None, "", -1
+        # 원본 주소부터 차례로 받고, 너무 작은 이미지(대체 이미지·썸네일)가 오면 다음 주소도 시도해 가장 큰 것을 쓴다
+        best, last_err = None, ""
         for i, url in enumerate(candidates):
             try:
                 r = self.session.get(url, headers={"Referer": referer}, timeout=30)
-                if r.status_code == 200 and r.content and r.headers.get("Content-Type", "image").startswith("image"):
-                    data, used = r.content, i
-                    break
-                last_err = f"HTTP {r.status_code}"
             except requests.RequestException as e:
                 last_err = str(e)
-        if data is None:
+                continue
+            if not (r.status_code == 200 and r.content and r.headers.get("Content-Type", "image").startswith("image")):
+                last_err = f"HTTP {r.status_code}"
+                continue
+            try:
+                with Image.open(io.BytesIO(r.content)) as im:
+                    info = (im.size[0], im.size[1], im.format, image_fingerprint(im))
+            except Exception:  # noqa: BLE001 - 이미지가 아니면 다음 주소
+                last_err = "이미지 형식 아님"
+                continue
+            if best is None or info[0] > best[1][0]:
+                best = (r.content, info, i)
+            if info[0] >= self.min_width:
+                break
+            if len(self.small_examples) < 5:
+                self.small_examples.append(f"{info[0]}x{info[1]} {info[2]} {len(r.content)}B "
+                                           f"({'원본주소' if i == 0 else '대체주소'}) {url[:90]}")
+        if best is None:
             return "fail", last_err
-
-        try:
-            with Image.open(io.BytesIO(data)) as im:
-                width, height, fmt = im.size[0], im.size[1], im.format
-                fp = image_fingerprint(im)
-        except Exception:  # noqa: BLE001 - 이미지가 아니면 실패 처리
-            return "fail", "이미지 형식 아님"
+        data, (width, height, fmt, fp), used = best
 
         if width < self.min_width:
             self._remember(url_key, "SKIP:small")
@@ -155,9 +164,10 @@ class PhotoStore:
         if not ws:
             return ""
         mid = ws[len(ws) // 2]
+        extra = ("\n  작은 이미지 응답 예시: " + " | ".join(self.small_examples)) if self.small_examples else ""
         return (f"화질 — 원본 주소로 받음 {q['원본']}장, 축소본으로 받음 {q['축소본']}장, "
                 f"가로 해상도 중간값 {mid}px (최소 {ws[0]} / 최대 {ws[-1]})"
-                + (f", 같은 사진을 더 큰 해상도로 교체 {q['replaced']}장" if q["replaced"] else ""))
+                + (f", 같은 사진을 더 큰 해상도로 교체 {q['replaced']}장" if q["replaced"] else "") + extra)
 
     def _unique(self, name):
         stem, ext = os.path.splitext(name)

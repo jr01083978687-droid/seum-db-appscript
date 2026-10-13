@@ -200,3 +200,13 @@ def test_mobile_thumb_tries_original_server_first():
     from ppd.blog_parser import BlogPhoto
     ph = BlogPhoto("https://mblogthumb-phinf.pstatic.net/A/1.jpg", False, "")
     assert ph.candidates()[0] == "https://postfiles.pstatic.net/A/1.jpg"
+
+
+def test_tiny_original_falls_back_to_next_url(tmp_path):
+    """원본 주소가 작은 대체 이미지를 주면 축소본 주소라도 큰 이미지를 받는다."""
+    tiny, real = _jpeg(120, 90, "gray"), _photo_jpeg(966, 724, seed=3)
+    sess = FakeSession({"orig": FakeResp(tiny), "orig?type=w966": FakeResp(real)})
+    store = PhotoStore(str(tmp_path), session=sess)
+    assert store.save("orig", ["orig", "orig?type=w966"], "a_1_01", "r")[0] == "saved"
+    assert "축소본으로 받음 1장" in store.quality_summary()
+    assert "120x90" in store.quality_summary()
