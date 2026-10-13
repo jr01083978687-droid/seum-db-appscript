@@ -152,24 +152,31 @@ class Job:
                 key = f"{blog_id}/{log_no}"
                 cands.setdefault(key, {"key": key, "blog_id": blog_id, "log_no": log_no, "url": r["link"],
                                        "title": r["title"], "author": r["blogger"],
+                                       "snippet": r["title"] + " " + r["description"],
                                        "date_text": r["postdate"].isoformat()})
 
-        # 정확도순을 먼저 (상호명이 흔한 단어로 쪼개지면 최신순 결과는 엉뚱한 글이 대부분), 다음 최신순
+        # 검색 결과를 먼저 모두 모은 뒤, 가능성 높은 글부터 본문을 연다
+        # (상호명이 흔한 단어면 최신순 결과 대부분이 무관한 글이라, 그대로 자르면 진짜 리뷰가 밀려난다)
         for sort in ("sim", "date"):
             for q in search_queries(name, address):
-                if len(cands) >= o.max_reviews:
-                    break
                 self.check_stop()
                 before = len(cands)
-                results = api.iter_relevant(q) if sort == "sim" else api.iter_recent(q, o.start)
+                results = api.iter_relevant(q, max_results=1000) if sort == "sim" else api.iter_recent(q, o.start)
                 for r in results:
                     add(r)
-                    if len(cands) >= o.max_reviews:
-                        break
                 self.log(f"공식 API 검색 「{q}」({'정확도순' if sort == 'sim' else '최신순'}) — 기간 내 새 후보 {len(cands) - before}개")
-        if len(cands) >= o.max_reviews:
-            self.log(f"후보가 최대 확인 수({o.max_reviews})에 도달 — 검색 종료 (더 받으려면 최대 확인 글 수를 늘리세요)")
-        self.log(f"공식 API {api.calls}회 호출, 후보 블로그 글 {len(cands)}개")
+
+        n = norm(name)
+        def rank(it):
+            if it.get("verified"):
+                return 0
+            return 1 if n and n in norm(it.get("snippet", "")) else 2
+        ordered = sorted(cands.values(), key=rank)
+        likely = sum(1 for it in ordered if rank(it) < 2)
+        self.log(f"공식 API {api.calls}회 호출, 후보 {len(ordered)}개 (플레이스 리뷰·제목/요약에 상호명 있는 글 {likely}개 우선 확인)")
+        if len(ordered) > o.max_reviews:
+            self.log(f"최대 확인 글 수({o.max_reviews})만큼만 확인합니다 — 나머지 {len(ordered) - o.max_reviews}개는 상호명이 보이지 않는 글")
+        cands = {it["key"]: it for it in ordered[: o.max_reviews]}
 
         self._verify = lambda it, post: self._matches_place(it, post, name, pid, address)
         folder = os.path.join(o.out_dir, safe_name(name, 60))
