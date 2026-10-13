@@ -519,7 +519,7 @@ class Job:
             got = 0
             for n, ph in enumerate(post.photos, 1):
                 self.check_stop()
-                base = f"{d:%Y-%m-%d}_{safe_name(it['blog_id'], 30)}_{n:02d}" + ("_영상" if ph.is_video else "")
+                base = f"{d:%Y-%m-%d}_{safe_name(it['blog_id'], 30)}_{it['log_no']}_{n:02d}" + ("_영상" if ph.is_video else "")
                 status, _ = store.save(ph.url, ph.candidates(), base, "https://m.blog.naver.com/")
                 self.stats[status] += 1
                 got += status == "saved"

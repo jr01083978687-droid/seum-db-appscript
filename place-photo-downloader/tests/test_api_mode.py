@@ -108,8 +108,8 @@ def test_api_mode_flow(tmp_path):
     folder = job.run()
     assert os.path.basename(folder) == "아우성황소곱창"
     files = sorted(f for f in os.listdir(folder) if f.endswith(".jpg"))
-    assert files == ["2026-09-10_bytitle_01.jpg", "2026-09-20_verified1_01.jpg",
-                     "2026-09-25_bymap_01.jpg", "2026-09-25_bymap_02.jpg"]
+    assert files == ["2026-09-10_bytitle_2002_01.jpg", "2026-09-20_verified1_1001_01.jpg",
+                     "2026-09-25_bymap_2001_01.jpg", "2026-09-25_bymap_2001_02.jpg"]
     assert job.stats["other"] == 1                       # 일산점 글 제외
     calls = job.http.calls
     assert not any("future" in c or "never" in c or "/old/" in c for c in calls)

@@ -114,7 +114,7 @@ def test_full_flow(tmp_path):
     print("\n".join(logs))
     assert os.path.basename(folder) == "스움식당 성수점"
     files = sorted(f for f in os.listdir(folder) if f.endswith(".jpg"))
-    assert files == ["2026-08-01_ccc_01.jpg", "2026-09-20_aaa_01.jpg", "2026-09-20_aaa_02.jpg",
+    assert files == ["2026-08-01_ccc_1003_01.jpg", "2026-09-20_aaa_1001_01.jpg", "2026-09-20_aaa_1001_02.jpg",
                      "2026-09-21_방문자_리뷰왕_01.jpg"]
     # 기간 밖(2025년) 블로그는 본문을 열지도 않는다
     assert not any("bbb" in c for c in job.http.calls)
