@@ -196,10 +196,13 @@ def test_visually_same_photo_kept_once_at_highest_resolution(tmp_path):
     assert "원본 주소로 받음 2장" in store.quality_summary()
 
 
-def test_mobile_thumb_tries_original_server_first():
+def test_original_server_tried_first():
     from ppd.blog_parser import BlogPhoto
     ph = BlogPhoto("https://mblogthumb-phinf.pstatic.net/A/1.jpg", False, "")
-    assert ph.candidates()[0] == "https://postfiles.pstatic.net/A/1.jpg"
+    assert ph.candidates()[:2] == ["https://blogfiles.pstatic.net/A/1.jpg",
+                                   "https://mblogthumb-phinf.pstatic.net/A/1.jpg?type=w966"]
+    thumb = BlogPhoto("http://blogfiles.naver.net/B/2.jpg", False, "")
+    assert thumb.candidates()[0] == "https://blogfiles.pstatic.net/B/2.jpg"
 
 
 def test_tiny_original_falls_back_to_next_url(tmp_path):

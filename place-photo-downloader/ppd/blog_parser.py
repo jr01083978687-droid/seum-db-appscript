@@ -41,15 +41,21 @@ class BlogPhoto:
     raw_url: str = ""  # 본문에 적혀 있던 URL (원본 요청 실패 시 대체)
 
     def candidates(self):
-        """다운로드 시도 순서: 원본 → (모바일 썸네일이면 원본 서버로 바꾼 주소) → w966 → 본문 URL."""
-        out = [self.url]
-        if "mblogthumb-phinf.pstatic.net" in self.url:
-            # 모바일 썸네일 서버는 축소본을 준다 → 같은 경로의 원본 서버 주소를 먼저 시도
-            out.insert(0, self.url.replace("mblogthumb-phinf.pstatic.net", "postfiles.pstatic.net"))
-        out.append(self.url + "?type=w966")
+        """다운로드 시도 순서: 블로그 원본 서버(진짜 원본) → 966px 축소본 → 본문에 적힌 주소.
+
+        2026-10 실측: postfiles/mblogthumb 주소에서 ?type 을 떼면 404 나 100px 썸네일이 오고,
+        같은 경로를 blogfiles.pstatic.net 에서 받으면 블로거가 올린 원본(예: 2992px, 5MB)이 온다.
+        """
+        out = []
+        m = re.match(r"https?://([^/]+)(/.*)", self.url)
+        if m and not self.is_video and m.group(1) in PHOTO_HOSTS:
+            out.append("https://blogfiles.pstatic.net" + m.group(2))
+        if not self.is_video:
+            out.append(self.url + "?type=w966")
+        out.append(self.url)
         if self.raw_url and self.raw_url not in out:
             out.append(self.raw_url)
-        return out
+        return list(dict.fromkeys(out))
 
 
 @dataclass
