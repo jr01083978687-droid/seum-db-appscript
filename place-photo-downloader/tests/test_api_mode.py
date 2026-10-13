@@ -112,7 +112,9 @@ def test_api_mode_flow(tmp_path):
                      "2026-09-25_bymap_2001_01.jpg", "2026-09-25_bymap_2001_02.jpg"]
     assert job.stats["other"] == 1                       # 일산점 글 제외
     calls = job.http.calls
-    assert not any("future" in c or "never" in c or "/old/" in c for c in calls)
+    assert not any("future" in c or "/old/" in c for c in calls)  # 기간 밖 글은 본문을 열지 않음
+    # 최신순은 오래된 글에서 멈추지만, 정확도순 검색이 그 뒤의 기간 내 글도 찾아낸다
+    assert any("never/2006" in c for c in calls)
 
 
 def test_api_mode_needs_keys(tmp_path):
@@ -161,3 +163,10 @@ def test_post_with_other_place_map_rejected():
     post = BlogPost("육회어때 응암점", None, [], html=html,
                     text="아우성황소곱창 옆 연서로29길 육회집. 아우성황소곱창 가기 전에 들름")
     assert Job._matches_place({}, post, "아우성황소곱창", PID, "서울 은평구 연서로29길 14-12") is None
+
+
+def test_search_queries_split_names():
+    from ppd.place_info import search_queries
+    a = "경기 수원시 권선구 하탑로 21 (탑동, 4층)"
+    assert area_tokens(a) == ["권선구", "하탑로", "탑동"]
+    assert search_queries("라이브 산꼼장어", a) == ["라이브 산꼼장어", "라이브산꼼장어", "수원 라이브산꼼장어", "탑동 라이브산꼼장어"]

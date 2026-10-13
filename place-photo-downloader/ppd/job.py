@@ -17,7 +17,7 @@ from .dates import parse_kr_date
 from .downloader import UA_MOBILE, PhotoStore, safe_name
 from .links import is_short_link, mobile_blog_url, parse_blog_url, parse_place_url
 from .naver_api import BlogSearch
-from .place_info import area_tokens, fetch_place, norm
+from .place_info import area_tokens, fetch_place, norm, search_queries
 from .reviews import extract_blog_reviews, extract_visitor_reviews, find_place_name
 
 BROWSER_CHANNELS = ("msedge", "chrome")
@@ -136,32 +136,39 @@ class Job:
         self.log(f"상호명: {name} / 주소: {address or '(확인 못 함)'}")
 
         cands = {}
-        for it in info["blog_items"]:  # 플레이스 화면에 연결된 블로그리뷰 = 확실한 글
+        placed = info["blog_items"]
+        for it in placed:  # 플레이스 화면에 연결된 블로그리뷰 = 확실한 글
             it["verified"] = True
             cands[it["key"]] = it
-        if cands:
-            self.log(f"플레이스 화면의 블로그리뷰 {len(cands)}개 확인")
+        if placed:
+            in_range = sum(1 for it in placed if self.in_range(parse_kr_date(it.get("date_text"))) or not parse_kr_date(it.get("date_text")))
+            self.log(f"플레이스 화면의 블로그리뷰 {len(placed)}개 확인 (기간 내 {in_range}개)")
 
-        queries = [name] + [f"{name} {t}" for t in area_tokens(address)[:2]]
-        for q in dict.fromkeys(queries):
-            self.check_stop()
-            before = len(cands)
-            for r in api.iter_recent(q, o.start):
-                if r["postdate"] and r["postdate"] > o.end:
-                    continue
-                blog_id, log_no = parse_blog_url(r["link"])
-                if not blog_id:
-                    continue
+        def add(r):
+            if not r["postdate"] or not (o.start <= r["postdate"] <= o.end):
+                return
+            blog_id, log_no = parse_blog_url(r["link"])
+            if blog_id:
                 key = f"{blog_id}/{log_no}"
                 cands.setdefault(key, {"key": key, "blog_id": blog_id, "log_no": log_no, "url": r["link"],
                                        "title": r["title"], "author": r["blogger"],
-                                       "date_text": r["postdate"].isoformat() if r["postdate"] else ""})
+                                       "date_text": r["postdate"].isoformat()})
+
+        # 정확도순을 먼저 (상호명이 흔한 단어로 쪼개지면 최신순 결과는 엉뚱한 글이 대부분), 다음 최신순
+        for sort in ("sim", "date"):
+            for q in search_queries(name, address):
                 if len(cands) >= o.max_reviews:
                     break
-            self.log(f"공식 API 검색 「{q}」 — 새 후보 {len(cands) - before}개")
-            if len(cands) >= o.max_reviews:
-                self.log(f"후보가 최대 확인 수({o.max_reviews})에 도달 — 검색 종료")
-                break
+                self.check_stop()
+                before = len(cands)
+                results = api.iter_relevant(q) if sort == "sim" else api.iter_recent(q, o.start)
+                for r in results:
+                    add(r)
+                    if len(cands) >= o.max_reviews:
+                        break
+                self.log(f"공식 API 검색 「{q}」({'정확도순' if sort == 'sim' else '최신순'}) — 기간 내 새 후보 {len(cands) - before}개")
+        if len(cands) >= o.max_reviews:
+            self.log(f"후보가 최대 확인 수({o.max_reviews})에 도달 — 검색 종료 (더 받으려면 최대 확인 글 수를 늘리세요)")
         self.log(f"공식 API {api.calls}회 호출, 후보 블로그 글 {len(cands)}개")
 
         self._verify = lambda it, post: self._matches_place(it, post, name, pid, address)

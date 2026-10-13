@@ -62,9 +62,24 @@ def fetch_place(session, ptype, pid, log):
 
 
 def area_tokens(address):
-    """주소에서 동네 단서(…구, …동, …로/길)를 뽑는다."""
-    toks = re.findall(r"[가-힣0-9]+(?:구|동|읍|면|로|길)(?=\s|$)", address or "")
-    return [t for t in toks if len(t) >= 2]
+    """주소에서 동네 단서(…구, …동, …로/길)를 뽑는다. "(탑동, 4층)" 같은 괄호 안도 본다."""
+    text = re.sub(r"[(),]", " ", address or "")
+    toks = re.findall(r"[가-힣0-9]+(?:구|동|읍|면|로|길)(?=\s|$)", text)
+    return list(dict.fromkeys(t for t in toks if len(t) >= 2))
+
+
+def search_queries(name, address):
+    """검색어 후보: 상호명 / 붙여쓴 상호명 / 도시·동 + 상호명."""
+    compact = re.sub(r"\s+", "", name)
+    out = [name, compact]
+    city = re.search(r"([가-힣]{2,})시(?=\s|$)", address or "")
+    if city:
+        out.append(f"{city.group(1)} {compact}")
+    for t in area_tokens(address):
+        if t.endswith(("동", "읍", "면")):
+            out.append(f"{t} {compact}")
+            break
+    return list(dict.fromkeys(q for q in out if q.strip()))
 
 
 def norm(text):

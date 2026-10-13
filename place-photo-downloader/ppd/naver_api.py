@@ -48,6 +48,27 @@ class BlogSearch:
             raise ApiError(f"네이버 API 오류 {r.status_code}: {r.text[:200]}")
         return r.json()
 
+    def iter_relevant(self, query, max_results=300):
+        """정확도순 상위 결과 (날짜 무관 — 기간 필터는 호출한 쪽에서)."""
+        start = 1
+        while start <= min(max_results, MAX_START):
+            items = self.page(query, start=start, sort="sim").get("items") or []
+            for it in items:
+                yield self._item(it)
+            if len(items) < PAGE_SIZE:
+                return
+            start += PAGE_SIZE
+
+    @staticmethod
+    def _item(it):
+        return {
+            "link": it.get("link", ""),
+            "title": strip_tags(it.get("title")),
+            "description": strip_tags(it.get("description")),
+            "blogger": strip_tags(it.get("bloggername")),
+            "postdate": parse_postdate(it.get("postdate")),
+        }
+
     def iter_recent(self, query, since, max_results=MAX_START):
         """최신순으로 넘기다가 since 보다 오래된 글이 나오면 멈춘다."""
         start = 1
@@ -58,13 +79,7 @@ class BlogSearch:
                 d = parse_postdate(it.get("postdate"))
                 if d is not None and d < since:
                     return
-                yield {
-                    "link": it.get("link", ""),
-                    "title": strip_tags(it.get("title")),
-                    "description": strip_tags(it.get("description")),
-                    "blogger": strip_tags(it.get("bloggername")),
-                    "postdate": d,
-                }
+                yield self._item(it)
             if len(items) < PAGE_SIZE:
                 return
             start += PAGE_SIZE
