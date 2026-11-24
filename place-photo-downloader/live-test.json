@@ -1,9 +1,9 @@
 {
-  "link": "https://naver.me/G1ppPOGG",
+  "link": "https://map.naver.com/p/entry/place/35379492",
   "start": "2000-01-01",
-  "end": "2026-10-13",
+  "end": "2026-11-24",
   "mode": "api",
   "visitor": false,
   "max_reviews": 300,
-  "run": 19
+  "run": 20
 }
